@@ -1,0 +1,115 @@
+<mujoco model="erhu">
+  <!--
+    ERHU MODEL — MuJoCo MJCF
+    =========================
+    Layout:
+      - Sound box (qin tong)  : thick cylinder, free-floating rigid body
+      - Neck (qin gan)        : thin cylinder, rigidly welded to the sound box
+      - Strings (D + A)       : rigid thin cylinders, hinged at the peg end with
+                                 torsional springs approximating string tension /
+                                 restoring force for small transverse motion
+      - Bow stick (qin gong)  : chain of capsule links joined by hinges with
+                                 stiffness/springref -> discretized torsional-spring beam
+      - Bow hair               : 1-D flexcomp ("cable") strung between the bow tips,
+                                 pre-tensioned, using the elasticity plugin for
+                                 bending/twisting stiffness
+      - Contact                : custom friction/solref/solimp on the hair flex and
+                                 the string geoms, tuned to emulate the high static
+                                 (rosin) friction needed for Helmholtz stick-slip motion
+
+    IMPORTANT NOTE ON THE "HELMHOLTZ CONTACT MODEL":
+    MuJoCo's native contact solver only implements Coulomb (constant-coefficient)
+    friction. The Helmholtz bowed-string mechanism requires a *velocity-dependent*
+    friction law (high static friction at low relative sliding speed, dropping off
+    as speed increases) to reproduce the stick-slip sawtooth motion. That nonlinear
+    law cannot be expressed purely in XML — it needs a control/force callback
+    (mjcb_control or an engine plugin). This file sets up the geometry, tensioning,
+    and the best-available static friction parameters natively in XML, and the
+    accompanying chat message gives the callback code that layers the actual
+    Helmholtz velocity-dependent friction on top at simulation time.
+  -->
+
+  <compiler angle="radian" autolimits="true"/>
+
+  <extension>
+    <!-- Needed for bend/twist stiffness of the 1-D bow-hair cable -->
+    <plugin plugin="mujoco.elasticity.cable"/>
+  </extension>
+
+  <option timestep="0.0002" gravity="0 0 -9.81" integrator="implicitfast">
+    <flag contact="enable" energy="enable"/>
+  </option>
+
+  <default>
+    <geom density="750" solref="0.002 1" solimp="0.9 0.95 0.001"/>
+    <joint damping="0.01"/>
+
+    <!-- rosin-coated hair vs. steel/nylon-wound string: high static grip -->
+    <default class="string_contact">
+      <geom friction="1.2 0.02 0.001" solref="0.001 1" solimp="0.92 0.97 0.0005" condim="3"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <light pos="0 0 2" dir="0 0 -1" diffuse="1 1 1"/>
+    <geom name="floor" type="plane" size="2 2 0.1" rgba="0.3 0.3 0.3 1"/>
+
+    <!-- ============================ ERHU BODY ============================ -->
+    <body name="erhu_root" pos="0 0 0.5">
+      <freejoint name="erhu_free"/>
+
+      <!-- Sound box: thick cylinder (qin tong), axis vertical -->
+      <body name="sound_box" pos="0 0 0">
+        <geom name="sound_box_geom" type="cylinder" size="0.045 0.065"
+              rgba="0.4 0.2 0.1 1" mass="0.35" zaxis="1 0 0"/>
+        <site name="tailpiece" pos="0.02 -0.045 0.06" size="0.003"/>
+
+        <!-- Neck: thin cylinder (qin gan), rigidly attached above the sound box -->
+        <body name="neck" pos="0.03 0 0.065">
+          <geom name="neck_geom" type="cylinder" size="0.009 0.30"
+                pos="0 0 0.30" rgba="0.55 0.35 0.15 1" mass="0.12"/>
+        </body>
+      </body>
+
+      <!-- ============================ STRINGS =========================== -->
+      <!-- Each string: rigid thin cylinder pivoted at the peg with a 2-DOF
+           gimbal (two orthogonal hinges), each carrying a torsional spring
+           that approximates the restoring force of string tension for
+           small transverse (bowing) displacements. -->
+      <body name="string_D" pos="0.07 -0.003 0.595">
+        <joint name="string_D_x" type="hinge" axis="1 0 0" pos="0 0 0"
+               stiffness="600" springref="0" damping="0.002"/>
+        <joint name="string_D_z" type="hinge" axis="0 0 1" pos="0 0 0"
+               stiffness="600" springref="0" damping="0.002"/>
+        <geom name="string_D_geom" type="cylinder" size="0.0006 0.3"
+              pos="0 0 -0.3" rgba="0.9 0.9 0.85 1" mass="0.003"
+              class="string_contact"/>
+      </body>
+
+      <body name="string_A" pos="0.07 0.003 0.595">
+        <joint name="string_A_x" type="hinge" axis="1 0 0" pos="0 0 0"
+               stiffness="900" springref="0" damping="0.002"/>
+        <joint name="string_A_z" type="hinge" axis="0 0 1" pos="0 0 0"
+               stiffness="900" springref="0" damping="0.002"/>
+        <geom name="string_A_geom" type="cylinder" size="0.0006 0.3"
+              pos="0 0 -0.3" rgba="0.85 0.85 0.9 1" mass="0.0022"
+              class="string_contact"/>
+      </body>
+          </body>
+
+  </worldbody>
+
+  <include file="bow.xml"/>
+
+  <equality>
+    <weld name="hair_to_frog" body1="bow_hair_0" body2="bow_link_1" solref="0.01 1"/>
+    <weld name="hair_to_tip"  body1="bow_hair_35" body2="bow_tip" solref="0.01 1"/>
+  </equality>
+
+  <sensor>
+    <framepos name="bow_tip_pos" objtype="site" objname="bow_tip_site"/>
+    <framelinvel name="bow_tip_vel" objtype="site" objname="bow_tip_site"/>
+    <framepos name="string_D_pos" objtype="geom" objname="string_D_geom"/>
+    <framelinvel name="string_D_vel" objtype="geom" objname="string_D_geom"/>
+  </sensor>
+</mujoco>

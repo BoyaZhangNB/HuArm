@@ -1,0 +1,101 @@
+<mujoco model="simple_arm">
+
+    <compiler angle="degree"/>
+    <option gravity="0 0 -9.81"/>
+
+    <default>
+        <joint damping="2" />
+        <geom type="capsule"
+              rgba="0.2 0.5 0.8 1"
+              density="1000"
+              size="0.02"/>
+        <position kp="100" ctrlrange="-3.14 3.14"/>
+    </default>
+
+    <worldbody>
+
+        <!-- Ground -->
+        <geom type="plane"
+              size="5 5 0.1"
+              rgba="0.9 0.9 0.9 1"/>
+
+        <!-- Base -->
+        <body name="base" pos="0 0 1">
+
+            <geom type="sphere"
+                  size="0.05 0.05"
+                  rgba="0.3 0.3 0.3 1"/>
+
+            <!-- Joint 1 : rotate about Y -->
+            <joint name="joint1"
+                   type="hinge"
+                   axis="0 1 0"/>
+
+            <!-- Link 1 (30 cm) -->
+            <body name="link1" pos="0 0 0">
+                <!-- <inertial pos="0 0 -0.15" mass="0.25"/>-->
+
+                <geom type="cylinder" fromto="0 0 0   0 0 -0.30"/>
+
+                <!-- Joint 2 : rotate about Y -->
+                <body name="joint2_body" pos="0 0 -0.30">
+
+                    <joint name="joint2"
+                           type="hinge"
+                           axis="0 1 0"/>
+
+                    <!-- Link 2 (5 cm) -->
+                    <geom fromto="0 0 0   -0.05 0 0"/>
+
+                    <!-- Joint 3 : rotate about Z -->
+                    <body name="joint3_body" pos="-0.05 0 0">
+
+                        <joint name="joint3"
+                               type="hinge"
+                               axis="0 0 1"/>
+
+                        <!-- Link 3 (30 cm) -->
+                        <geom fromto="0 0 0   -0.30 0 0"/>
+
+                        <!-- Joint 4 : rotate about Z -->
+                        <body name="joint4_body" pos="-0.30 0 0">
+
+                            <joint name="joint4"
+                                   type="hinge"
+                                   axis="0 0 1"/>
+
+                            <!-- Link 4 (10 cm) -->
+                            <geom fromto="0 0 0   -0.1 0 0"/>
+                            
+                            <body name="end_effector" pos="-0.1 0 0">
+
+                                <geom type="sphere"
+                                      size="0.05"
+                                      rgba="0.8 0.2 0.2 1"/>
+
+                                
+
+                            </body>
+
+                        </body>
+
+                    </body>
+
+                </body>
+
+            </body>
+
+        </body>
+
+    </worldbody>
+
+    <actuator>
+
+        <position joint="joint1"/>
+        <position joint="joint2"/>
+        <position joint="joint3"/>
+        <position joint="joint4"/>
+
+    </actuator>
+
+</mujoco>
