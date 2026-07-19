@@ -1,4 +1,4 @@
-    <mujoco model="bow">
+<mujoco model="bow">
         <!-- ============================== BOW ================================ -->
         <!-- Rigid-body chain of 8 capsule links with hinge joints + torsional
                  springs (stiffness/springref) approximating a continuously
@@ -71,12 +71,12 @@
                                 spacing="0.0145 0.001 0.001" radius="0.00025"
                                 pos="0.7 0.3 0.6" euler="0 0 0"
                                 rgba="0.95 0.92 0.85 1" mass="0.002">
-                <edge equality="true"/>
+                <edge equality="true" solref="0.001 1" solimp="0.99 0.999 0.0001"/>
                 <plugin plugin="mujoco.elasticity.cable">
                     <config key="twist" value="5e6"/>
                     <config key="bend" value="5e6"/>
                 </plugin>
-                <contact selfcollide="none" condim="3" friction="1.2 0.02 0.001" solref="0.001 1" solimp="0.99 0.99 0.0005"/>
+                <contact selfcollide="none" condim="3" friction="1.2 0.02 0.001" solref="0.001 1" solimp="0.9 0.99 0.0005"/>
             </flexcomp>
         </worldbody>
     </mujoco>
