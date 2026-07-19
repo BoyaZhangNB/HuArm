@@ -57,6 +57,10 @@
                 <site name="bow_frog_site" pos="0 0 -0.01" size="0.003"/>
             </body>
 
+
+            <body name="bow_target" mocap="true" pos="0.4 0.3 0.6">
+                <geom type="sphere" size="0.01" rgba="0 1 0 0.5" conaffinity="0" contype="0"/>
+            </body>
             <!-- ============================ BOW HAIR ============================== -->
             <!-- 1-D flexcomp "cable" strung between the frog and the tip, pre-tensioned
                      by placing the two endpoints slightly farther apart than the hair's
@@ -64,7 +68,7 @@
                      plugin; axial tension comes from the (near-inextensible) edge
                      constraints being stretched at pinning time. -->
             <flexcomp name="bow_hair" type="grid" dim="1" count="36 1 1"
-                                spacing="0.0155 0.001 0.001" radius="0.00025"
+                                spacing="0.0145 0.001 0.001" radius="0.00025"
                                 pos="0.7 0.3 0.6" euler="0 0 0"
                                 rgba="0.95 0.92 0.85 1" mass="0.002">
                 <edge equality="true"/>
@@ -72,7 +76,7 @@
                     <config key="twist" value="5e6"/>
                     <config key="bend" value="5e6"/>
                 </plugin>
-                <contact selfcollide="none" condim="3" friction="1.2 0.02 0.001" solref="0.001 1" solimp="0.92 0.97 0.0005"/>
+                <contact selfcollide="none" condim="3" friction="1.2 0.02 0.001" solref="0.001 1" solimp="0.99 0.99 0.0005"/>
             </flexcomp>
         </worldbody>
     </mujoco>

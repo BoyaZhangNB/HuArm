@@ -36,7 +36,7 @@
     <plugin plugin="mujoco.elasticity.cable"/>
   </extension>
 
-  <option timestep="0.0002" gravity="0 0 -9.81" integrator="implicitfast">
+  <option timestep="0.0002" gravity="0 0 0" integrator="implicitfast">
     <flag contact="enable" energy="enable"/>
   </option>
 
@@ -78,9 +78,9 @@
            small transverse (bowing) displacements. -->
       <body name="string_D" pos="0.07 -0.003 0.595">
         <joint name="string_D_x" type="hinge" axis="1 0 0" pos="0 0 0"
-               stiffness="600" springref="0" damping="0.002"/>
+               stiffness="600" springref="0" damping="0.2"/>
         <joint name="string_D_z" type="hinge" axis="0 0 1" pos="0 0 0"
-               stiffness="600" springref="0" damping="0.002"/>
+               stiffness="600" springref="0" damping="0.2"/>
         <geom name="string_D_geom" type="cylinder" size="0.0006 0.3"
               pos="0 0 -0.3" rgba="0.9 0.9 0.85 1" mass="0.003"
               class="string_contact"/>
@@ -88,9 +88,9 @@
 
       <body name="string_A" pos="0.07 0.003 0.595">
         <joint name="string_A_x" type="hinge" axis="1 0 0" pos="0 0 0"
-               stiffness="900" springref="0" damping="0.002"/>
+               stiffness="900" springref="0" damping="0.2"/>
         <joint name="string_A_z" type="hinge" axis="0 0 1" pos="0 0 0"
-               stiffness="900" springref="0" damping="0.002"/>
+               stiffness="900" springref="0" damping="0.2"/>
         <geom name="string_A_geom" type="cylinder" size="0.0006 0.3"
               pos="0 0 -0.3" rgba="0.85 0.85 0.9 1" mass="0.0022"
               class="string_contact"/>
@@ -102,8 +102,9 @@
   <include file="bow.xml"/>
 
   <equality>
-    <weld name="hair_to_frog" body1="bow_hair_0" body2="bow_link_1" solref="0.01 1"/>
-    <weld name="hair_to_tip"  body1="bow_hair_35" body2="bow_tip" solref="0.01 1"/>
+    <weld name="teleop_coupling" body1="bow_frog" body2="bow_target" anchor="0 0 0" solref="0.02 1"/>
+    <connect name="hair_to_frog" body1="bow_hair_0" body2="bow_link_1" anchor="0 0 0" solref="0.01 1"/>
+    <connect name="hair_to_tip"  body1="bow_hair_35" body2="bow_tip" anchor="0 0 0" solref="0.01 1"/>
   </equality>
 
   <sensor>
