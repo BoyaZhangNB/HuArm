@@ -1,71 +1,23 @@
 <mujoco model="bow">
     <default>
         <default class="bow_link">
-            <joint stiffness="15" springref="0" damping="0.01"/>
+            <joint stiffness="15" springref="0" damping="0.1"/>
         </default>
     </default>
         <!-- ============================== BOW ================================ -->
         <!-- Rigid-body chain of 8 capsule links with hinge joints + torsional
                  springs (stiffness/springref) approximating a continuously
                  bendable bow stick, held under camber by the hair tension. -->
+        <!-- ================== BOW FROG / STICK CHAIN ==========================
+             The bow_frog body (and the whole capsule-hinge chain hanging off
+             it) is no longer a free-floating body here. It has been moved
+             into arm.xml, nested inside the arm's "end_effector" body, so
+             that the arm physically holds the bow via a compliant ("rubber")
+             hinge joint (see arm.xml for "bow_frog_hinge"). This also means
+             the old mocap "bow_target" + "teleop_coupling" weld used to
+             teleoperate the frog directly are no longer needed (the arm is
+             now what moves the bow) and have been removed. -->
         <worldbody>
-            <body name="bow_frog" pos="0.4 0.3 0.6" euler="0 1.5708 0">
-                <freejoint name="bow_free"/>
-                <geom name="frog_geom" type="capsule" size="0.008 0.02" rgba="0.2 0.5 0.05 1" mass="0.02"/>
-
-                <body name="bow_link_0" pos="0.005 0 0.025" zaxis="1 0 1">
-                    <joint name="bow_hinge_0" type="hinge" axis="1 0 0" class="bow_link"/>
-                    <geom name="bow_geom_0" type="capsule" fromto="0 0 0  0 0 0.05" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.004"/>
-
-                    <body name="bow_link_1" pos="-0 0 0.055" zaxis="-1 0 1">
-                        <joint name="bow_hinge_1" type="hinge" axis="1 0 0" class="bow_link"/>
-                        <geom name="bow_geom_1" type="capsule" fromto="0 0 0  0 0 0.09" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.008"/>
-
-                        <body name="bow_link_2" pos="0 0 0.09">
-                            <joint name="bow_hinge_2" type="hinge" axis="1 0 0" class="bow_link"/>
-                            <geom name="bow_geom_2" type="capsule" fromto="0 0 0  0 0 0.09" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.008"/>
-
-                            <body name="bow_link_3" pos="0 0 0.09">
-                                <joint name="bow_hinge_3" type="hinge" axis="1 0 0" class="bow_link"/>
-                                <geom name="bow_geom_3" type="capsule" fromto="0 0 0  0 0 0.09" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.008"/>
-
-                                <body name="bow_link_4" pos="0 0 0.09">
-                                    <joint name="bow_hinge_4" type="hinge" axis="1 0 0" class="bow_link"/>
-                                    <geom name="bow_geom_4" type="capsule" fromto="0 0 0  0 0 0.09" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.008"/>
-
-                                    <body name="bow_link_5" pos="0 0 0.09">
-                                        <joint name="bow_hinge_5" type="hinge" axis="1 0 0" class="bow_link"/>
-                                        <geom name="bow_geom_5" type="capsule" fromto="0 0 0  0 0 0.09" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.008"/>
-
-                                        <body name="bow_link_6" pos="0 0 0.07">
-                                            <joint name="bow_hinge_6" type="hinge" axis="1 0 0" class="bow_link"/>
-                                            <geom name="bow_geom_6" type="capsule" fromto="0 0 0  0 0 0.02" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.008"/>
-
-                                            <body name="bow_link_7" pos="0 0 0.02">
-                                                <joint name="bow_hinge_7" type="hinge" axis="1 0 0" class="bow_link"/>
-                                                <geom name="bow_geom_7" type="capsule" fromto="0 0 0  -0.05 0 0.09" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.008"/>
-
-                                                <body name="bow_tip" pos="-0.05 0 0.09">
-                                                    <joint name="bow_hinge_8" type="hinge" axis="1 0 0" class="bow_link"/>
-                                                    <geom name="bow_tip_geom" type="capsule" fromto="0 0 0  0 0 0.03" size="0.004" rgba="0.4 0.25 0.1 1" mass="0.004"/>
-                                                    <site name="bow_tip_site" pos="0 0 0.03" size="0.003"/>
-                                                </body>
-                                            </body>
-                                        </body>
-                                    </body>
-                                </body>
-                            </body>
-                        </body>
-                    </body>
-                </body>
-
-                <site name="bow_frog_site" pos="0 0 -0.01" size="0.003"/>
-            </body>
-
-
-            <body name="bow_target" mocap="true" pos="0.4 0.3 0.6">
-                <geom type="sphere" size="0.01" rgba="0 1 0 0.5" conaffinity="0" contype="0"/>
-            </body>
             <!-- ============================ BOW HAIR ============================== -->
             <!-- 1-D flexcomp "cable" strung between the frog and the tip, pre-tensioned
                      by placing the two endpoints slightly farther apart than the hair's
@@ -74,7 +26,7 @@
                      constraints being stretched at pinning time. -->
             <flexcomp name="bow_hair" type="grid" dim="1" count="36 1 1"
                                 spacing="0.0145 0.001 0.001" radius="0.00025"
-                                pos="0.7 0.3 0.6" euler="0 0 0"
+                                pos="0.575 0 0.645" euler="0 0 0"
                                 rgba="0.95 0.92 0.85 1" mass="0.002">
                 <edge equality="true" solref="0.001 1" solimp="0.99 0.999 0.0001"/>
                 <plugin plugin="mujoco.elasticity.cable">

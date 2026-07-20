@@ -102,8 +102,18 @@
   <include file="bow.xml"/>
 
   <equality>
-    <weld name="teleop_coupling" body1="bow_frog" body2="bow_target" anchor="0 0 0" solref="0.02 1"/>
+    <!-- bow_frog is now physically attached to the arm's end effector (see
+         arm.xml, "bow_frog_hinge"), so the old mocap teleop weld between
+         bow_frog and bow_target has been removed - it would otherwise
+         over-constrain the frog against both the arm and the mocap body. -->
     <connect name="hair_to_frog" body1="bow_hair_0" body2="bow_link_0" anchor="0 0 0" solref="0.01 1"/>
     <connect name="hair_to_tip"  body1="bow_hair_35" body2="bow_tip" anchor="0 0 0" solref="0.01 1"/>
   </equality>
+
+  <sensor>
+    <!-- bow_frog_site sits right at the bow_frog_hinge joint (see arm.xml),
+         so this reads the 3-axis reaction force the compliant "rubber"
+         hinge is transmitting between the end effector and the bow -->
+    <force name="bow_arm_contact" site="bow_frog_site"/>
+  </sensor>
 </mujoco>
