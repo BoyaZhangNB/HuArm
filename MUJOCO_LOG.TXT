@@ -186,3 +186,6 @@ WARNING Sat Jul 18 07:55:28 2026: Nan, Inf or huge value in QACC at DOF 9. The s
 
 WARNING Sat Jul 18 08:04:40 2026: Nan, Inf or huge value in QACC at DOF 9. The simulation is unstable. Time = 0.0030.
 
+WARNING Sun Jul 19 09:35:37 2026: flex 'bow_hair' is not rigid and has no equality constraints or passive forces
+Element name 'bow_hair', id 0
+

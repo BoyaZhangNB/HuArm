@@ -56,7 +56,7 @@
 
     <!-- ============================ ERHU BODY ============================ -->
     <body name="erhu_root" pos="0 0 0.5">
-      <freejoint name="erhu_free"/>
+      <!-- pinned -->
 
       <!-- Sound box: thick cylinder (qin tong), axis vertical -->
       <body name="sound_box" pos="0 0 0">
@@ -103,7 +103,7 @@
 
   <equality>
     <weld name="teleop_coupling" body1="bow_frog" body2="bow_target" anchor="0 0 0" solref="0.02 1"/>
-    <connect name="hair_to_frog" body1="bow_hair_0" body2="bow_link_1" anchor="0 0 0" solref="0.01 1"/>
+    <connect name="hair_to_frog" body1="bow_hair_0" body2="bow_link_0" anchor="0 0 0" solref="0.01 1"/>
     <connect name="hair_to_tip"  body1="bow_hair_35" body2="bow_tip" anchor="0 0 0" solref="0.01 1"/>
   </equality>
 
