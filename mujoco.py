@@ -20,6 +20,13 @@ def get_desired_position(t):
 
     return np.array([base_x, base_y + y_offset, base_z + z_offset])
 
+def get_teleop_position():
+    socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    socket.bind(("", 5005))
+    while True:
+        data, addr = socket.recvfrom(1024)
+        position = np.frombuffer(data, dtype=np.float32)
+        yield position
 
 def fix_hair_anchor_offsets(model):
     """
@@ -37,7 +44,8 @@ def fix_hair_anchor_offsets(model):
     """
     for name in ("hair_to_frog", "hair_to_tip"):
         eq_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_EQUALITY, name)
-        model.eq_data[eq_id][3:6] = 0.0
+        if eq_id >= 0:
+            model.eq_data[eq_id][3:6] = 0.0
 
 def main(xml_path):
     print(f"Using MuJoCo Version: {mujoco.__version__}")
@@ -59,17 +67,24 @@ def main(xml_path):
     with mujoco.viewer.launch_passive(model, data) as viewer:
         viewer.sync()
 
+    with mujoco.viewer.launch_passive(model, data) as viewer:
+        viewer.sync()
         print("Teleoperation loop running. Press ESC in the viewer to exit.")
 
         while viewer.is_running():
             step_start = time.time()
             current_sim_time = data.time
 
-            desired_pos = get_desired_position(current_sim_time)
-            data.mocap_pos[mocap_idx] = desired_pos
+            if mocap_idx >= 0:
+                desired_pos = get_desired_position(current_sim_time)
+                data.mocap_pos[mocap_idx] = desired_pos
 
             mujoco.mj_step(model, data)
             viewer.sync()
+
+            if data.time >= next_tension_print:
+                print_flex_tension(model, data)
+                next_tension_print = data.time + tension_print_interval
 
             elapsed_real = time.time() - step_start
             time_to_sleep = model.opt.timestep - elapsed_real

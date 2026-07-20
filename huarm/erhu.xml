@@ -106,11 +106,4 @@
     <connect name="hair_to_frog" body1="bow_hair_0" body2="bow_link_0" anchor="0 0 0" solref="0.01 1"/>
     <connect name="hair_to_tip"  body1="bow_hair_35" body2="bow_tip" anchor="0 0 0" solref="0.01 1"/>
   </equality>
-
-  <sensor>
-    <framepos name="bow_tip_pos" objtype="site" objname="bow_tip_site"/>
-    <framelinvel name="bow_tip_vel" objtype="site" objname="bow_tip_site"/>
-    <framepos name="string_D_pos" objtype="geom" objname="string_D_geom"/>
-    <framelinvel name="string_D_vel" objtype="geom" objname="string_D_geom"/>
-  </sensor>
 </mujoco>

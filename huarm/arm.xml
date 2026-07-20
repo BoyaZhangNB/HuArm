@@ -4,12 +4,14 @@
     <option gravity="0 0 -9.81"/>
 
     <default>
-        <joint damping="2" />
-        <geom type="capsule"
-              rgba="0.2 0.5 0.8 1"
-              density="1000"
-              size="0.02"/>
-        <position kp="100" ctrlrange="-3.14 3.14"/>
+        <default class="arm">
+            <joint damping="0.5"/>
+            <geom type="capsule"
+                rgba="0.2 0.5 0.8 1"
+                density="1000"
+                size="0.02"/>
+            <position kp="5000" kv="50" ctrlrange="-3.14 3.14"/>
+        </default>
     </default>
 
     <worldbody>
@@ -20,7 +22,7 @@
               rgba="0.9 0.9 0.9 1"/>
 
         <!-- Base -->
-        <body name="base" pos="0 0 1">
+        <body name="base" pos="1 0 1" childclass="arm">
 
             <geom type="sphere"
                   size="0.05 0.05"
@@ -97,5 +99,7 @@
         <position joint="joint4"/>
 
     </actuator>
+
+    <include file="erhu.xml"/>
 
 </mujoco>
