@@ -47,6 +47,26 @@ def fix_hair_anchor_offsets(model):
         if eq_id >= 0:
             model.eq_data[eq_id][3:6] = 0.0
 
+def get_flex_edge_tension(model, data, flex_edge_id=None):
+    if flex_edge_id is None:
+        for i in range(model.neq):
+            if mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_EQUALITY, i) is None:
+                flex_edge_id = i
+
+    mask = (data.efc_type == mujoco.mjtConstraint.mjCNSTR_EQUALITY) & (data.efc_id == flex_edge_id)
+    if not np.any(mask):
+        return None
+    return data.efc_force[mask]
+
+def print_flex_tension(model, data, flex_edge_id=None):
+    tension = get_flex_edge_tension(model, data, flex_edge_id)
+    if tension is None or tension.size == 0:
+        print(f"t={data.time:6.3f}  bow hair tension: (no active edge constraints)")
+        return
+    print(f"t={data.time:6.3f}  bow hair tension [N]  "
+          f"min={tension.min():+.4f}  max={tension.max():+.4f}  "
+          f"mean={tension.mean():+.4f}  |mean|={np.abs(tension).mean():.4f}")
+
 def main(xml_path):
     print(f"Using MuJoCo Version: {mujoco.__version__}")
 
@@ -64,8 +84,8 @@ def main(xml_path):
         print("Error: 'bow_target' body with mocap='true' not found in XML!")
         sys.exit(1)
 
-    with mujoco.viewer.launch_passive(model, data) as viewer:
-        viewer.sync()
+    tension_print_interval = 0.5
+    next_tension_print = 0
 
     with mujoco.viewer.launch_passive(model, data) as viewer:
         viewer.sync()
@@ -83,7 +103,7 @@ def main(xml_path):
             viewer.sync()
 
             if data.time >= next_tension_print:
-                print_flex_tension(model, data)
+                print_flex_tension(model, data, flex_edge_id=3)
                 next_tension_print = data.time + tension_print_interval
 
             elapsed_real = time.time() - step_start
