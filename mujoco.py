@@ -261,7 +261,7 @@ def pretension_bow_hair(model, data):
     if flex_edge_id is not None:
         data.eq_active[flex_edge_id] = 0
 
-    # snap_hair_taut(model, data, rear_target, tip_target)
+    snap_hair_taut(model, data, rear_target, tip_target)
     mujoco.mj_forward(model, data)
 
     data.eq_active[frog_weld_id] = 1
@@ -297,7 +297,6 @@ def main(xml_path):
     with mujoco.viewer.launch_passive(model, data) as viewer:
         viewer.sync()
         print("Teleoperation loop running. Press ESC in the viewer to exit.")
-        time.sleep(10)
         while viewer.is_running():
             step_start = time.time()
             current_sim_time = data.time
