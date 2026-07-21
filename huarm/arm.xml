@@ -22,7 +22,7 @@
               rgba="0.9 0.9 0.9 1"/>
 
         <!-- Base -->
-        <body name="base" pos="1 0 1" childclass="arm">
+        <body name="base" pos="0.3 -0.3 1" childclass="arm" euler="0 0 -1.5708">
 
             <geom type="sphere"
                   size="0.05 0.05"
@@ -67,13 +67,13 @@
                                    axis="0 0 1"/>
 
                             <!-- Link 4 (10 cm) -->
-                            <geom fromto="0 0 0   -0.1 0 0"/>
+                            <geom fromto="0 0 0   -0.1 0 0" rgba="0.8 0 0 1"/>
                             
                             <body name="end_effector" pos="-0.1 0 0">
 
                                 <geom type="sphere"
-                                      size="0.05"
-                                      rgba="0.8 0.2 0.2 1"/>
+                                      size="0.02"
+                                      rgba="0.1 0.5 0.2 1"/>
 
                                 <!-- ================================================================
                                      ARM <-> BOW COUPLING: "rubber hinge"
@@ -87,7 +87,7 @@
                                      to taste; the force sensor "bow_arm_contact" (see erhu.xml) reads
                                      the reaction force transmitted through this joint at
                                      "bow_frog_site", i.e. the tension in the "rubber" connection. -->
-                                <body name="bow_frog" pos="0 0 -0.05" euler="-1.5708 0 0">
+                                <body name="bow_frog" pos="0 0 0" euler="-1.5708 3.14 0">
 
                                     <joint name="bow_frog_hinge"
                                            type="hinge"
