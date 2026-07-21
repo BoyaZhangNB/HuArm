@@ -34,7 +34,7 @@ def fix_hair_anchor_offsets(model):
     hair endpoints and points on the bow stick. Because the flexcomp is
     authored at its own XML position, independent of the bow's geometry, the
     two bodies are NOT coincident at compile time (bow_hair_0 sits ~4.7cm from
-    bow_link_1, bow_hair_35 sits a similar distance from bow_tip). MuJoCo's
+    bow_link_0, bow_hair_35 sits a similar distance from bow_tip). MuJoCo's
     compiler auto-derives each connect's "anchor in body2's frame" from that
     compile-time offset -- meaning the constraint's real target is "stay
     offset from body2 by the original gap", not "coincide with body2". That's
@@ -52,6 +52,7 @@ def get_flex_edge_tension(model, data, flex_edge_id=None):
         for i in range(model.neq):
             if mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_EQUALITY, i) is None:
                 flex_edge_id = i
+                break
 
     mask = (data.efc_type == mujoco.mjtConstraint.mjCNSTR_EQUALITY) & (data.efc_id == flex_edge_id)
     if not np.any(mask):
@@ -67,6 +68,132 @@ def print_flex_tension(model, data, flex_edge_id=None):
           f"min={tension.min():+.4f}  max={tension.max():+.4f}  "
           f"mean={tension.mean():+.4f}  |mean|={np.abs(tension).mean():.4f}")
 
+def get_string_contact_point(model, data, string_body_name):
+    """
+    Returns the world position of the FREE (bottom) end of a string capsule --
+    the point near the sound box where bowing contact happens -- NOT the
+    body's own xpos, which is the pivot at the TOP of the string (near the
+    tuning peg, ~0.6m away from where the string actually crosses the box).
+    """
+    bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, string_body_name)
+    xmat = data.xmat[bid].reshape(3, 3)
+    # The string geom is centered at local (0,0,-0.3) with half-length 0.3,
+    # so its far (bottom) end is at local (0,0,-0.6).
+    local_tip = np.array([0.0, 0.0, -0.6])
+    return data.xpos[bid] + xmat @ local_tip
+ 
+ 
+def between_strings_target(model, data):
+    """Midpoint between the two strings' contact points, lifted just clear of
+    the sound box surface."""
+    midpoint = (get_string_contact_point(model, data, "string_D")
+                + get_string_contact_point(model, data, "string_A")) / 2.0
+ 
+    # The sound box is a cylinder lying on its side (axis along world X), so
+    # its surface in z sits at sound_box_z + radius, not at its center z.
+    sound_box_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "sound_box")
+    sound_box_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "sound_box_geom")
+    sound_box_top_z = data.xpos[sound_box_id][2] + model.geom_size[sound_box_geom_id][0]
+    midpoint[2] = max(midpoint[2], sound_box_top_z) + 0.01  # 1cm clearance
+    return midpoint
+ 
+ 
+def weighted_point_and_jacobian(model, data, body_weights, dof_idxs):
+    """
+    body_weights: list of (body_name, weight), weights summing to 1.
+    Returns the weighted-average world position of those bodies' origins and
+    the corresponding position Jacobian restricted to dof_idxs (both position
+    and Jacobian are linear in body position, so a weighted sum of bodies'
+    positions/Jacobians is valid).
+    """
+    point = np.zeros(3)
+    J = np.zeros((3, len(dof_idxs)))
+    for name, w in body_weights:
+        bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name)
+        point += w * data.xpos[bid]
+        jacp = np.zeros((3, model.nv))
+        jacr = np.zeros((3, model.nv))
+        mujoco.mj_jac(model, data, jacp, jacr, data.xpos[bid], bid)
+        J += w * jacp[:, dof_idxs]
+    return point, J
+ 
+ 
+def jacobian_ik(model, data, body_weights, target_pos, joint_names,
+                max_iters=200, damping=1e-2, step_clip=0.1, tol=1e-4):
+    """
+    Damped-least-squares IK: iteratively adjusts qpos for `joint_names`
+    (each assumed to be a 1-dof hinge/slide joint) so that the weighted
+    reference point defined by `body_weights` reaches target_pos. This
+    directly teleports qpos (as opposed to driving it through actuators over
+    time), matching bodies that are part of the arm's actual kinematic tree
+    -- unlike the bow_hair flex particles, bow_link_0/bow_tip ARE rigid
+    bodies in that tree, so their Jacobian w.r.t. the arm joints is
+    well-defined and nonzero.
+    """
+    dof_idxs = [model.jnt_dofadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn)]
+                for jn in joint_names]
+    qpos_idxs = [model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn)]
+                 for jn in joint_names]
+ 
+    for it in range(max_iters):
+        mujoco.mj_forward(model, data)
+        point, J = weighted_point_and_jacobian(model, data, body_weights, dof_idxs)
+        err = target_pos - point
+        err_norm = np.linalg.norm(err)
+        if err_norm < tol:
+            return it, err_norm
+        # damped least squares: dtheta = J^T (J J^T + lambda^2 I)^-1 err
+        dtheta = J.T @ np.linalg.solve(J @ J.T + damping**2 * np.eye(3), err)
+        step_norm = np.linalg.norm(dtheta)
+        if step_norm > step_clip:
+            dtheta *= step_clip / step_norm
+        for qidx, d in zip(qpos_idxs, dtheta):
+            data.qpos[qidx] += d
+ 
+    mujoco.mj_forward(model, data)
+    point, _ = weighted_point_and_jacobian(model, data, body_weights, dof_idxs)
+    return max_iters, np.linalg.norm(target_pos - point)
+ 
+ 
+def insert_hair_between_strings(model, data, arm_joint_names=("joint1", "joint2", "joint3", "joint4")):
+    """
+    Move the bow -- via the arm's joints, using Jacobian-based IK -- so the
+    taut hair passes between the two erhu strings, resting just above the
+    sound box.
+ 
+    This supersedes the earlier single-particle-teleport approach. That
+    approach tried to move one bow_hair_i vertex directly; but bow_hair
+    particles aren't part of the arm's kinematic tree (they're independent
+    flex DOFs coupled only via equality constraints), so there's no
+    meaningful Jacobian relating them to the arm joints, and moving one
+    particle across the ~0.5m gap between the bow and the strings violated
+    the hair's edge-length constraint by ~30x its rest length -- verified to
+    produce a massive corrective transient that undid the move within
+    ~0.2s of sim time.
+ 
+    bow_link_0 and bow_tip, by contrast, ARE rigid bodies in the arm's
+    kinematic chain, so a real position Jacobian w.r.t. the arm joints
+    exists. We solve IK to place the *midpoint* of bow_link_0/bow_tip at the
+    target (approximating "some point along the taut hair", since the hair
+    runs approximately straight between them), then re-run
+    pretension_bow_hair() so the flex hair is laid out fresh between the
+    endpoints' new positions -- which by then are already close to the
+    target, so no large/unstable stretch is needed.
+    """
+    target = between_strings_target(model, data)
+    print(f"Target insertion point (between strings, above sound box): {target}")
+ 
+    body_weights = [("bow_link_0", 0.5), ("bow_tip", 0.5)]
+    iters, err = jacobian_ik(model, data, body_weights, target, list(arm_joint_names))
+    print(f"Arm IK converged in {iters} iterations, final position error {err:.6f} m")
+
+    bow_link_0_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "bow_link_0")
+    bow_tip_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "bow_tip")
+    midpoint = 0.5 * (data.xpos[bow_link_0_id] + data.xpos[bow_tip_id])
+    print(f"Bow midpoint after IK + pretension: {midpoint} "
+          f"(target was {target}, residual {np.linalg.norm(midpoint - target):.4f} m)")
+
+
 def main(xml_path):
     print(f"Using MuJoCo Version: {mujoco.__version__}")
 
@@ -74,8 +201,9 @@ def main(xml_path):
     fix_hair_anchor_offsets(model)
     data = mujoco.MjData(model)
     # data.xpos/xquat/etc. are all zero until forward kinematics has run once;
-    # pretension_bow_hair() needs real bow_tip/bow_link_1 positions, so populate them now.
+    # pretension_bow_hair() needs real bow_tip/bow_link_0 positions, so populate them now.
     mujoco.mj_forward(model, data)
+    insert_hair_between_strings(model, data)
 
     try:
         mocap_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "bow_target")
