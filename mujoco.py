@@ -309,8 +309,10 @@ def main(xml_path):
             viewer.sync()
 
             if data.time >= next_tension_print:
-                print_flex_tension(model, data, flex_edge_id=3)
+                # print_flex_tension(model, data)
                 next_tension_print = data.time + tension_print_interval
+                force = data.sensor("bow_arm_contact").data.copy()
+                print(f"t={data.time:6.3f} bow-arm contact force: {force} [N]")
 
             elapsed_real = time.time() - step_start
             time_to_sleep = model.opt.timestep - elapsed_real
