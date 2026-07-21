@@ -154,7 +154,16 @@ def jacobian_ik(model, data, body_weights, target_pos, joint_names,
     point, _ = weighted_point_and_jacobian(model, data, body_weights, dof_idxs)
     return max_iters, np.linalg.norm(target_pos - point)
  
- 
+def set_joint_ctrl(model, data, joint_names):
+    """
+    Set the control inputs for the specified joints to their current qpos
+    values, effectively "locking" them in place.
+    """
+    for jn in joint_names:
+        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn)
+        dof_idx = model.jnt_dofadr[jid]
+        data.ctrl[dof_idx] = data.qpos[model.jnt_qposadr[jid]]
+
 def insert_hair_between_strings(model, data, arm_joint_names=("joint1", "joint2", "joint3", "joint4")):
     """
     Move the bow -- via the arm's joints, using Jacobian-based IK -- so the
@@ -186,6 +195,7 @@ def insert_hair_between_strings(model, data, arm_joint_names=("joint1", "joint2"
     body_weights = [("bow_link_0", 0.5), ("bow_tip", 0.5)]
     iters, err = jacobian_ik(model, data, body_weights, target, list(arm_joint_names))
     print(f"Arm IK converged in {iters} iterations, final position error {err:.6f} m")
+    set_joint_ctrl(model, data, arm_joint_names)
 
     bow_link_0_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "bow_link_0")
     bow_tip_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "bow_tip")
