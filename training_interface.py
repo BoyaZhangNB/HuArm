@@ -26,7 +26,7 @@ from typing import Any, Callable, Dict, Protocol, Tuple
 import jax
 import jax.numpy as jp
 from flax import struct
-import tqdm
+from tqdm import tqdm
 
 from envs.mjx_env import MjxEnv, State
 

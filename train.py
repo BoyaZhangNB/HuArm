@@ -5,10 +5,10 @@ from example.example_agent import ReinforceAgent
 from envs.wrappers import AutoResetWrapper, EpisodeWrapper, VmapWrapper
 from envs.erhu_env import ErhuEnv
 
-NUM_ENVS = 4
+NUM_ENVS = 1
 EPISODE_LENGTH = 200
 STEPS_PER_ITER = 200
-NUM_ITERS = 2
+NUM_ITERS = 1
 
 
 def main():

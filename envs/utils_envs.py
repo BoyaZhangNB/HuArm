@@ -155,7 +155,7 @@ def _ik_point_fn(q_arm: jax.Array, model: mjx.Model, data: mjx.Data, body_ids: T
     return weights[0] * data_temp.xpos[body_ids[0]] + weights[1] * data_temp.xpos[body_ids[1]]
 
 
-def jacobian_ik(model: mjx.Model, data: mjx.Data, body_ids: Tuple[int, int], weights: Tuple[float, float], target_pos: jax.Array, qpos_idxs: jax.Array, max_iters=200, damping=1e-2, step_clip=0.1) -> jax.Array:
+def jacobian_ik(model: mjx.Model, data: mjx.Data, body_ids: Tuple[int, int], weights: Tuple[float, float], target_pos: jax.Array, qpos_idxs: jax.Array, max_iters=4, damping=1e-2, step_clip=0.1) -> jax.Array:
     """JAX-native IK solver using forward-mode Autodiff for the Jacobian and fori_loop for convergence."""
     q_arm_init = data.qpos[qpos_idxs]
 
