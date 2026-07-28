@@ -10,9 +10,11 @@
                                  restoring force for small transverse motion
       - Bow stick (qin gong)  : chain of capsule links joined by hinges with
                                  stiffness/springref -> discretized torsional-spring beam
-      - Bow hair               : 1-D flexcomp ("cable") strung between the bow tips,
-                                 pre-tensioned, using the elasticity plugin for
-                                 bending/twisting stiffness
+      - Bow hair               : chain of tiny capsule links joined by 3-DOF
+                                 (bend/bend/twist) spring-loaded hinges, strung
+                                 between the bow tips -> discretized torsional-
+                                 spring "cable" (rigid-body stand-in for the old
+                                 1-D flexcomp + elasticity plugin)
       - Contact                : custom friction/solref/solimp on the hair flex and
                                  the string geoms, tuned to emulate the high static
                                  (rosin) friction needed for Helmholtz stick-slip motion
@@ -31,13 +33,13 @@
 
   <compiler angle="radian" autolimits="true"/>
 
-  <extension>
-    <!-- Needed for bend/twist stiffness of the 1-D bow-hair cable -->
-    <plugin plugin="mujoco.elasticity.cable"/>
-  </extension>
+  <!-- No <extension>/<plugin> block needed any more: the bow hair used to
+       need mujoco.elasticity.cable for its bend/twist stiffness, but it's
+       now a plain rigid-body hinge-and-spring chain (see bow.xml), so the
+       plugin dependency has been removed along with it. -->
 
   <option timestep="0.0002" gravity="0 0 0" integrator="implicitfast">
-    <flag contact="enable" energy="enable"/>
+    <flag contact="enable"/>
   </option>
 
   <default>
