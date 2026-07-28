@@ -6,6 +6,9 @@ __pycache__/
 # C extensions
 *.so
 
+# Mujoco
+MUJOCO_LOG.TXT
+
 # Distribution / packaging
 .Python
 build/

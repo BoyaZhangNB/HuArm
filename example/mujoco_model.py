@@ -444,7 +444,7 @@ def main(xml_path):
             #     if aid >= 0:
             #         data.ctrl[aid] = angle
             elapsed_real = time.time() - start
-            print(f"Sim time {data.time:.3f}, elapsed real time {elapsed_real:.3f}")
+            print(f"Sim time {data.time:.3f}, elapsed real time {elapsed_real:.3f}", end="\r")
             if data.time >= elapsed_real:
                 time.sleep(0.01)
                 print(f"Sim time {data.time:.3f} is ahead of real time {elapsed_real:.3f}, sleeping to catch up...")
