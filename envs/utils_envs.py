@@ -22,26 +22,25 @@ def fix_hair_anchor_offsets(model):
 
 def get_string_contact_point(model, data, string_body_name):
     """
-    Returns the world position of the FREE (bottom) end of a string capsule --
-    the point near the sound box where bowing contact happens.
+    Returns the world position of the free (bottom) end of a string capsule.
     """
     bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, string_body_name)
     xmat = data.xmat[bid].reshape(3, 3)
-    # The string geom is centered at local (0,0,-0.3) with half-length 0.3,
-    # so its far (bottom) end is at local (0,0,-0.6).
     local_tip = np.array([0.0, 0.0, -0.6])
     return data.xpos[bid] + xmat @ local_tip
 
 
 def between_strings_target(model, data):
-    """Midpoint between the two strings' contact points, lifted clear of the sound box surface."""
+    """
+    Midpoint between the two string contact points, lifted clear of the sound box.
+    """
     midpoint = (get_string_contact_point(model, data, "string_D")
                 + get_string_contact_point(model, data, "string_A")) / 2.0
 
     sound_box_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "sound_box")
     sound_box_geom_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "sound_box_geom")
     sound_box_top_z = data.xpos[sound_box_id][2] + model.geom_size[sound_box_geom_id][0]
-    midpoint[2] = max(midpoint[2], sound_box_top_z) + 0.01  # 1cm clearance
+    midpoint[2] = max(midpoint[2], sound_box_top_z) + 0.01  # 1 cm clearance
     return midpoint
 
 
@@ -78,6 +77,7 @@ def jacobian_ik(model, data, body_weights, target_pos, joint_names,
         err_norm = np.linalg.norm(err)
         if err_norm < tol:
             return it, err_norm
+        
         dtheta = J.T @ np.linalg.solve(J @ J.T + damping**2 * np.eye(3), err)
         step_norm = np.linalg.norm(dtheta)
         if step_norm > step_clip:
@@ -103,7 +103,7 @@ def set_joint_ctrl(model, data, joint_names):
 
 def joint_to_actuator_id(model, joint_name):
     """
-    Looks up the position actuator driving joint_name.
+    Looks up the actuator driving joint_name.
     """
     jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
     if jid < 0:
@@ -118,7 +118,7 @@ def joint_to_actuator_id(model, joint_name):
 def insert_hair_between_strings(model, data, arm_joint_names=("joint1", "joint2", "joint3", "joint4")):
     """
     Solves arm IK to place the bow stick midpoint between the erhu strings,
-    resting just above the sound box.
+    then updates the single bow_hair body layout accordingly.
     """
     target = between_strings_target(model, data)
     print(f"Target insertion point (between strings, above sound box): {target}")
@@ -131,11 +131,11 @@ def insert_hair_between_strings(model, data, arm_joint_names=("joint1", "joint2"
     bow_link_0_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "bow_link_0")
     bow_tip_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "bow_tip")
     midpoint = 0.5 * (data.xpos[bow_link_0_id] + data.xpos[bow_tip_id])
-    print(f"Bow midpoint after IK: {midpoint} (residual {np.linalg.norm(midpoint - target):.4f} m)")
+    print(f"Bow midpoint after IK: {midpoint} (target residual: {np.linalg.norm(midpoint - target):.4f} m)")
 
 
 def _quat_aligning(v_from, v_to):
-    """Shortest-arc quaternion (w, x, y, z) rotating unit vector v_from onto v_to."""
+    """Computes the shortest-arc quaternion rotating unit vector v_from to v_to."""
     v_from = v_from / np.linalg.norm(v_from)
     v_to = v_to / np.linalg.norm(v_to)
     dot = np.clip(np.dot(v_from, v_to), -1.0, 1.0)
@@ -155,7 +155,7 @@ def _quat_aligning(v_from, v_to):
 
 def snap_hair_taut(model, data, rear_target, tip_target):
     """
-    Positions and aligns the single rigid body 'bow_hair' between
+    Positions and aligns the single rigid capsule body 'bow_hair' between
     rear_target (frog end) and tip_target (tip end) using its free joint.
     """
     bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "bow_hair")
@@ -207,8 +207,8 @@ def init_huarm(model, data, id_dict=None):
     """
     Prepares the model/data for a new episode.
     """
+    mujoco.mj_forward(model, data)
     fix_hair_anchor_offsets(model)
     insert_hair_between_strings(model, data)
     pretension_bow_hair(model, data)
-    mujoco.mj_forward(model, data)
     return model, data
