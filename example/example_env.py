@@ -15,6 +15,7 @@ from typing import Any, Dict
 
 import jax
 import jax.numpy as jp
+from mujoco import mjx
 
 from envs.mjx_env import MjxEnv, State
 
@@ -56,7 +57,8 @@ class CartpoleSwingUp(MjxEnv):
         )
         qvel = jax.random.uniform(qvel_rng, (2,), minval=-0.05, maxval=0.05)
 
-        data = self.pipeline_init(qpos, qvel)
+        data = mjx.make_data(self.mjx_model)
+        data = mjx.forward(self.mjx_model, data)
         info: Dict[str, Any] = {}
         obs = self._get_obs(data, info)
         reward, done = jp.zeros(()), jp.zeros(())

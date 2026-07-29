@@ -10,8 +10,8 @@ nothing else changes.
 
 import jax
 
-from example_agent import ReinforceAgent
-from example_env import CartpoleSwingUp
+from .example_agent import ReinforceAgent
+from .example_env import CartpoleSwingUp
 from training_interface import train
 from envs.wrappers import AutoResetWrapper, EpisodeWrapper, VmapWrapper
 
@@ -26,7 +26,7 @@ def main():
     env = CartpoleSwingUp()
     env = EpisodeWrapper(env, episode_length=EPISODE_LENGTH)
     env = AutoResetWrapper(env)
-    env = VmapWrapper(env, batch_size=NUM_ENVS)
+    env = VmapWrapper(env, num_envs=NUM_ENVS)
 
     # 2. Build any agent satisfying the Agent protocol -- fully decoupled
     #    from the env/model above.

@@ -5,10 +5,10 @@ from example.example_agent import ReinforceAgent
 from envs.wrappers import AutoResetWrapper, EpisodeWrapper, VmapWrapper
 from envs.erhu_env import ErhuEnv
 
-NUM_ENVS = 1
-EPISODE_LENGTH = 200
-STEPS_PER_ITER = 200
-NUM_ITERS = 1
+NUM_ENVS = 64
+EPISODE_LENGTH = 2000
+STEPS_PER_ITER = 2000
+NUM_ITERS = 10
 
 
 def main():
@@ -16,7 +16,7 @@ def main():
     env = ErhuEnv(n_frames=40)
     env = EpisodeWrapper(env, episode_length=EPISODE_LENGTH)
     env = AutoResetWrapper(env)
-    env = VmapWrapper(env, batch_size=NUM_ENVS)
+    env = VmapWrapper(env, num_envs=NUM_ENVS)
 
     # 2. Build any agent satisfying the Agent protocol -- fully decoupled
     #    from the env/model above.
@@ -38,4 +38,5 @@ def main():
 
 
 if __name__ == "__main__":
+    # jax.config.update('jax_platform_name', 'cpu')
     main()

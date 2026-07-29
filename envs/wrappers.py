@@ -134,9 +134,9 @@ class VmapWrapper(Wrapper):
     jax.vmap. This is what lets MJX simulate thousands of envs on a GPU/TPU
     in lockstep, independent of whatever algorithm consumes the batch."""
 
-    def __init__(self, env: MjxEnv, batch_size: int):
+    def __init__(self, env: MjxEnv, num_envs: int):
         super().__init__(env)
-        self.batch_size = batch_size
+        self.batch_size = num_envs
 
     def reset(self, rng: jax.Array) -> State:
         rngs = jax.random.split(rng, self.batch_size)

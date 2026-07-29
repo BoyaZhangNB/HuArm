@@ -4,7 +4,7 @@ import jax.numpy as jp
 import mujoco
 from mujoco import mjx
 from .mjx_env import MjxEnv, State
-from .utils_envs import init_huarm, build_id_dict
+from .utils_envs import init_huarm
 
 from typing import Any, Dict
 
@@ -12,14 +12,20 @@ class ErhuEnv(MjxEnv):
     """A simple environment for controlling an Erhu robot. n_frames is frame_skip"""
     def __init__(self, n_frames: int = 4, **kwargs):
         super().__init__(xml_path="huarm/arm.xml", n_frames=n_frames, **kwargs)
-        self.id_dict = build_id_dict(self.mj_model)
+        self.id_dict = None
+        # Lower constraint solver iterations for faster tracing
+        self.mj_model.opt.iterations = 4
+        self.mj_model.opt.ls_iterations = 4
+        self.mj_model, self.mj_data = init_huarm(self.mj_model, self.mj_data, self.id_dict)
+        self.mjx_model = mjx.put_model(self.mj_model)
+        self.mjx_data = mjx.put_data(self.mj_model, self.mj_data)
+
         self.terminal_condition = 30 # 30 seconds
 
     def reset(self, rng: jax.Array) -> State:
         rng, env_rng= jax.random.split(rng, 2)
         
-        data = self.pipeline_init()
-        self.mjx_model, data = init_huarm(self.mjx_model, data, self.id_dict)
+        data = self.mjx_data
         # TODO implement domain randomization function
         # self.mjx_model, in_axes = domain_randomization(self.mjx_model, env_rng)
 
@@ -41,7 +47,7 @@ class ErhuEnv(MjxEnv):
         action = jp.clip(action, -1.0, 1.0)
         data = self.pipeline_step(state.pipeline_state, action)
         
-        info: Dict[str, Any] = {}
+        info: Dict[str, Any] = state.info.copy()
         obs = self._get_obs(data, info)
         # Define a simple reward function based on joint positions
         reward = -jp.sum(jp.square(data.qpos))  # Encourage staying near zero position
