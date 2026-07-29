@@ -69,7 +69,8 @@
                                         <geom name="bow_geom_0" type="capsule" fromto="0 0 0  0 0 0.05" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.004"/>
 
                                         <body name="bow_link_1" pos="-0 0 0.055" zaxis="-1 0 1">
-                                            <geom name="bow_geom_1" type="capsule" fromto="0 0 0  0 0 0.36" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.008" contype="1" conaffinity="1"/>
+                                            <geom name="bow_geom_1" type="capsule" fromto="0 0 0  0 0 0.36" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.008" contype="2" conaffinity="1"/>
+                                            
                                             <body name="bow_link_7" pos="0 0 0.36">
                                                 <geom name="bow_geom_7" type="capsule" fromto="0 0 0  -0.05 0 0.09" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.008"/>
 

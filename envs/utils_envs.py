@@ -8,17 +8,6 @@ import mujoco
 import numpy as np
 
 
-def fix_hair_anchor_offsets(model):
-    """
-    Zeroes the body2-frame anchor offsets (eq_data[3:6]) for the <connect> constraints
-    linking 'bow_hair' to 'bow_link_0' and 'bow_tip'. This ensures the constraints 
-    pin the endpoints together without static offsets derived at compile time.
-    """
-    for name in ("hair_to_frog", "hair_to_tip"):
-        eq_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_EQUALITY, name)
-        if eq_id >= 0:
-            model.eq_data[eq_id][3:6] = 0.0
-
 
 def get_string_contact_point(model, data, string_body_name):
     """
@@ -117,8 +106,11 @@ def joint_to_actuator_id(model, joint_name):
 
 def insert_hair_between_strings(model, data, arm_joint_names=("joint1", "joint2", "joint3", "joint4")):
     """
-    Solves arm IK to place the bow stick midpoint between the erhu strings,
-    then updates the single bow_hair body layout accordingly.
+    Solves arm IK to place the bow stick midpoint between the erhu strings.
+    Since bow_hair is now a rigid body welded to bow_tip (no free joint, no
+    equality constraints), positioning bow_link_0 / bow_tip via arm IK is
+    sufficient to place the hair as well -- it simply follows the bow's
+    kinematic chain, no separate hair layout/pretension step is needed.
     """
     target = between_strings_target(model, data)
     print(f"Target insertion point (between strings, above sound box): {target}")
@@ -134,81 +126,10 @@ def insert_hair_between_strings(model, data, arm_joint_names=("joint1", "joint2"
     print(f"Bow midpoint after IK: {midpoint} (target residual: {np.linalg.norm(midpoint - target):.4f} m)")
 
 
-def _quat_aligning(v_from, v_to):
-    """Computes the shortest-arc quaternion rotating unit vector v_from to v_to."""
-    v_from = v_from / np.linalg.norm(v_from)
-    v_to = v_to / np.linalg.norm(v_to)
-    dot = np.clip(np.dot(v_from, v_to), -1.0, 1.0)
-    if dot > 1.0 - 1e-9:
-        return np.array([1.0, 0.0, 0.0, 0.0])
-    if dot < -1.0 + 1e-9:
-        axis = np.cross(v_from, [1.0, 0.0, 0.0])
-        if np.linalg.norm(axis) < 1e-6:
-            axis = np.cross(v_from, [0.0, 1.0, 0.0])
-        axis = axis / np.linalg.norm(axis)
-        return np.array([0.0, axis[0], axis[1], axis[2]])
-    axis = np.cross(v_from, v_to)
-    axis = axis / np.linalg.norm(axis)
-    angle = np.arccos(dot)
-    return np.array([np.cos(angle / 2), *(axis * np.sin(angle / 2))])
-
-
-def snap_hair_taut(model, data, rear_target, tip_target):
-    """
-    Positions and aligns the single rigid capsule body 'bow_hair' between
-    rear_target (frog end) and tip_target (tip end) using its free joint.
-    """
-    bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "bow_hair")
-    jadr = model.body_jntadr[bid]
-    qadr = model.jnt_qposadr[jadr]
-    dadr = model.jnt_dofadr[jadr]
-
-    direction = tip_target - rear_target
-    length = np.linalg.norm(direction)
-    direction = direction / length if length > 1e-9 else np.array([1.0, 0.0, 0.0])
-
-    # Position free joint root at rear target
-    data.qpos[qadr:qadr + 3] = rear_target
-    # Align local X-axis capsule with target direction
-    data.qpos[qadr + 3:qadr + 7] = _quat_aligning(np.array([1.0, 0.0, 0.0]), direction)
-    # Zero linear and angular velocity
-    data.qvel[dadr:dadr + 6] = 0.0
-
-
-def pretension_bow_hair(model, data):
-    """
-    Lays out the single bow_hair capsule straight between bow_link_0 and bow_tip,
-    re-engaging equality constraints to hold tension via compliant solref/solimp settings.
-    """
-    frog_weld_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_EQUALITY, "hair_to_frog")
-    tip_weld_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_EQUALITY, "hair_to_tip")
-
-    bow_tip_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "bow_tip")
-    bow_link_0_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "bow_link_0")
-    rear_target = data.xpos[bow_link_0_id].copy()
-    tip_target = data.xpos[bow_tip_id].copy()
-
-    if frog_weld_id >= 0:
-        data.eq_active[frog_weld_id] = 0
-    if tip_weld_id >= 0:
-        data.eq_active[tip_weld_id] = 0
-
-    snap_hair_taut(model, data, rear_target, tip_target)
-    mujoco.mj_forward(model, data)
-
-    if frog_weld_id >= 0:
-        data.eq_active[frog_weld_id] = 1
-    if tip_weld_id >= 0:
-        data.eq_active[tip_weld_id] = 1
-    mujoco.mj_forward(model, data)
-
-
 def init_huarm(model, data, id_dict=None):
     """
     Prepares the model/data for a new episode.
     """
     mujoco.mj_forward(model, data)
-    fix_hair_anchor_offsets(model)
     insert_hair_between_strings(model, data)
-    pretension_bow_hair(model, data)
     return model, data
