@@ -27,6 +27,7 @@ import jax
 import jax.numpy as jp
 from flax import struct
 from tqdm import tqdm
+import time
 
 from envs.mjx_env import MjxEnv, State
 
@@ -112,10 +113,18 @@ def train(
     state = env.reset(reset_rng)
 
     for it in tqdm(range(num_iterations), desc="Training", unit="iter"):
+        t0 = time.perf_counter()
         state, batch, rng = rollout(
             env, agent, train_state, state, rng, steps_per_iteration
         )
         train_state, metrics = agent.update(train_state, batch)
+
+        # Force sync to get accurate wall-clock execution time
+        jax.block_until_ready(metrics)
+        step_time = time.perf_counter() - t0
+
+        if it == 0:
+            print(f"\n[Iteration 0] Compilation + Execution time: {step_time:.4f}s")
         log_fn(it, metrics)
 
     return train_state

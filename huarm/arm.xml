@@ -115,5 +115,10 @@
     </actuator>
 
     <include file="erhu.xml"/>
+<!-- 
+    <contact>
+        <pair geom1="bow_hair_geom" geom2="string_D_geom"/>
+        <pair geom1="bow_hair_geom" geom2="string_A_geom"/>
+    </contact> -->
 
 </mujoco>

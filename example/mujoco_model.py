@@ -159,6 +159,22 @@ def compute_arm_ctrl_for_target(model, ik_data, target_pos, joint_names,
                  for jn in joint_names]
     return {jn: ik_data.qpos[qi] for jn, qi in zip(joint_names, qpos_idxs)}
 
+def print_all_contact(model, data):
+    print("\n--- Theoretically Allowed Contact Pairs ---")
+    for i in range(model.ngeom):
+        for j in range(i + 1, model.ngeom):
+            # Exclude geoms on the same body if parent/child contact is disabled
+            if model.geom_bodyid[i] == model.geom_bodyid[j]:
+                continue
+                
+            type_i, aff_i = model.geom_contype[i], model.geom_conaffinity[i]
+            type_j, aff_j = model.geom_contype[j], model.geom_conaffinity[j]
+            
+            # Check bitmask condition
+            if (type_i & aff_j) or (type_j & aff_i):
+                name_i = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, i) or f"geom_{i}"
+                name_j = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, j) or f"geom_{j}"
+                print(f"{name_i} <---> {name_j}")
 
 def main(xml_path):
     print(f"Using MuJoCo Version: {mujoco.__version__}")
@@ -182,6 +198,7 @@ def main(xml_path):
     with mujoco.viewer.launch_passive(model, data) as viewer:
         viewer.sync()
         print("Teleoperation loop running. Press ESC in viewer to exit.")
+        print_all_contact(model, data)
         start = time.time()
         while viewer.is_running():
             elapsed_real = time.time() - start
