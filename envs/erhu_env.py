@@ -16,7 +16,7 @@ class ErhuEnv(MjxEnv):
         # Lower constraint solver iterations for faster tracing
         self.mj_model.opt.iterations = 4
         self.mj_model.opt.ls_iterations = 4
-        self.mj_model, self.mj_data = init_huarm(self.mj_model, self.mj_data, self.id_dict)
+        self.mj_model, self.mj_data = init_huarm(self.mj_model, self.mj_data)
         self.mjx_model = mjx.put_model(self.mj_model)
         self.mjx_data = mjx.put_data(self.mj_model, self.mj_data)
 

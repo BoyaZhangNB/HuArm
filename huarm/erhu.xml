@@ -10,11 +10,12 @@
                                  restoring force for small transverse motion
       - Bow stick (qin gong)  : chain of capsule links joined by hinges with
                                  stiffness/springref -> discretized torsional-spring beam
-      - Bow hair               : chain of tiny capsule links joined by 3-DOF
-                                 (bend/bend/twist) spring-loaded hinges, strung
-                                 between the bow tips -> discretized torsional-
-                                 spring "cable" (rigid-body stand-in for the old
-                                 1-D flexcomp + elasticity plugin)
+      - Bow hair               : single rigid capsule body, held taut between
+                                 the bow's frog and tip by two compliant
+                                 <connect> equality constraints (rigid-body
+                                 stand-in for the old 1-D flexcomp +
+                                 elasticity plugin, and before that a
+                                 36-link spring-hinge chain)
       - Contact                : custom friction/solref/solimp on the hair flex and
                                  the string geoms, tuned to emulate the high static
                                  (rosin) friction needed for Helmholtz stick-slip motion
@@ -49,6 +50,10 @@
     <!-- rosin-coated hair vs. steel/nylon-wound string: high static grip -->
     <default class="string_contact">
       <geom friction="1.2 0.02 0.001" solref="0.001 1" solimp="0.92 0.97 0.0005" condim="3"/>
+    </default>
+
+    <default class="bow_hair_eq">
+        <equality solref="0.01 1" solimp="0.9 0.95 0.001"/>
     </default>
   </default>
 
@@ -107,9 +112,18 @@
     <!-- bow_frog is now physically attached to the arm's end effector (see
          arm.xml, "bow_frog_hinge"), so the old mocap teleop weld between
          bow_frog and bow_target has been removed - it would otherwise
-         over-constrain the frog against both the arm and the mocap body. -->
-    <connect name="hair_to_frog" body1="bow_hair_0" body2="bow_link_0" anchor="0 0 0" solref="0.01 1"/>
-    <connect name="hair_to_tip"  body1="bow_hair_35" body2="bow_tip" anchor="0 0 0" solref="0.01 1"/>
+         over-constrain the frog against both the arm and the mocap body.
+
+         Bow hair is now a single rigid body ("bow_hair", see bow.xml)
+         instead of a 36-link chain, so both connects below share the same
+         body1 and differ only in the anchor point: 0 0 0 is bow_hair's
+         near/frog end, 0.558 0 0 is its far/tip end (its full length).
+         solref="0.01 1" is deliberately looser than this file's default
+         geom solref (0.002 1); with no interior joints left to flex, this
+         pair of compliant connects is now the ONLY source of "give" in the
+         hair, so keep it soft rather than pin-rigid. -->
+    <connect name="hair_to_frog" class="bow_hair_eq" body1="bow_hair" body2="bow_link_0" anchor="0 0 0"/>
+    <connect name="hair_to_tip"  class="bow_hair_eq" body1="bow_hair" body2="bow_tip" anchor="0.558 0 0"/>
   </equality>
 
   <sensor>

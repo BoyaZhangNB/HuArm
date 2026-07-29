@@ -4,23 +4,25 @@
             <joint stiffness="15" springref="0" damping="0.1"/>
         </default>
 
-        <!-- Replaces the old flexcomp "cable" plugin (bend/twist elasticity)
-             with a discretized rigid-body analogue: each of the 36 hair
-             segments is a tiny rigid capsule, and consecutive segments are
-             joined by a 3-DOF "universal + twist" hinge stack (two bend
-             axes perpendicular to the hair, one twist axis along it), each
-             carrying its own torsional spring. This is the same
-             stiffness/springref/damping discretization trick already used
-             for the bow stick above (class="bow_link"), just applied at a
-             finer pitch (36 links of ~1.55 cm instead of 8 of ~9 cm) and
-             with an extra twist DOF to stand in for the plugin's "twist"
-             elasticity term. The starting stiffness/damping values below
-             are a reasonable first guess for "stiff, lightly-damped hair"
-             — tune them (and mass/radius) to match the frequency response
-             / floppiness you actually want; there's no exact unit-for-unit
-             conversion from the old plugin's "bend"/"twist" moduli. -->
+        <!-- Bow hair, take 2: a SINGLE rigid capsule body instead of the
+             36-link hinge-chain discretization (which itself replaced the
+             original flexcomp "cable"). There is no internal bend/twist DOF
+             left at all: the body cannot flex along its own length.
+             "Softness" now lives entirely at its two attachment points: the
+             body hangs on a free joint (so it has 6 unconstrained DOF of its
+             own) and is held in place only by the "hair_to_frog" /
+             "hair_to_tip" <connect> equality constraints in erhu.xml. Those
+             constraints are what needs to feel spring-like now (previously
+             the many hinge springs distributed along the chain gave you a
+             floppy, bending strand; here the whole rigidness is
+             concentrated in one body). Use a compliant solref/solimp on
+             those two equality constraints, something like
+             solref="0.01 1" solimp="0.9 0.95 0.001" (numbers to tune) is
+             a reasonable starting point instead of MuJoCo's stiff default
+             so they behave like two soft springs pulling a rigid rod
+             taut, rather than a hard pin. mass/friction below are otherwise
+             carried over unchanged from the per-segment version. -->
         <default class="bow_hair">
-            <joint stiffness="0.03" springref="0" damping="0.0005"/>
             <geom type="capsule" size="0.00025" rgba="0.95 0.92 0.85 1"
                   contype="2" conaffinity="1"
                   friction="1.2 0.02 0.001" solref="0.001 1" solimp="0.9 0.99 0.0005" condim="3"/>
@@ -41,203 +43,34 @@
              now what moves the bow) and have been removed. -->
         <worldbody>
             <!-- ============================ BOW HAIR ============================== -->
-            <!-- Rigid-body replacement for the old 1-D flexcomp "cable" strung
-                 between the frog and the tip. Instead of a deformable flex
-                 element, this is now a serial chain of 36 rigid capsule
-                 bodies (bow_hair_0 ... bow_hair_35, same names/count as the
-                 flexcomp's auto-generated nodes so the "hair_to_frog" /
-                 "hair_to_tip" equality constraints in erhu.xml still work
-                 unmodified) linked by spring-loaded hinges (see class
-                 "bow_hair" above). bow_hair_0 gets its own free joint (like
-                 an unpinned flex node) since its only other connection to
-                 the world is the "hair_to_frog" equality weld; the rest of
-                 the chain hangs off it through the hinge stack. Near-
-                 inextensibility (previously the flex "edge" equality /
-                 solref/solimp) now falls out for free from the links being
-                 rigid, so no separate axial constraint is needed. Contact
-                 friction/solref/solimp are carried on each geom instead of
-                 a flex-wide <contact> block; contype/conaffinity are set so
-                 hair segments don't collide with each other (as
-                 "selfcollide=none" did) but still collide with everything
-                 else (e.g. the strings). -->
-            <body name="bow_hair_0" pos="0.575 0 0.645">
-                <joint name="bow_hair_0_free" type="free"/>
-                <geom name="bow_hair_geom_0" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                <body name="bow_hair_1" pos="0.0155 0 0">
-                    <joint name="bow_hair_1_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                    <joint name="bow_hair_1_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                    <geom name="bow_hair_geom_1" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                    <body name="bow_hair_2" pos="0.0155 0 0">
-                        <joint name="bow_hair_2_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                        <joint name="bow_hair_2_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                        <geom name="bow_hair_geom_2" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                        <body name="bow_hair_3" pos="0.0155 0 0">
-                            <joint name="bow_hair_3_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                            <joint name="bow_hair_3_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                            <geom name="bow_hair_geom_3" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                            <body name="bow_hair_4" pos="0.0155 0 0">
-                                <joint name="bow_hair_4_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                <joint name="bow_hair_4_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                <geom name="bow_hair_geom_4" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                <body name="bow_hair_5" pos="0.0155 0 0">
-                                    <joint name="bow_hair_5_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                    <joint name="bow_hair_5_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                    <geom name="bow_hair_geom_5" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                    <body name="bow_hair_6" pos="0.0155 0 0">
-                                        <joint name="bow_hair_6_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                        <joint name="bow_hair_6_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                        <geom name="bow_hair_geom_6" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                        <body name="bow_hair_7" pos="0.0155 0 0">
-                                            <joint name="bow_hair_7_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                            <joint name="bow_hair_7_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                            <geom name="bow_hair_geom_7" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                            <body name="bow_hair_8" pos="0.0155 0 0">
-                                                <joint name="bow_hair_8_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                <joint name="bow_hair_8_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                <geom name="bow_hair_geom_8" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                <body name="bow_hair_9" pos="0.0155 0 0">
-                                                    <joint name="bow_hair_9_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                    <joint name="bow_hair_9_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                    <geom name="bow_hair_geom_9" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                    <body name="bow_hair_10" pos="0.0155 0 0">
-                                                        <joint name="bow_hair_10_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                        <joint name="bow_hair_10_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                        <geom name="bow_hair_geom_10" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                        <body name="bow_hair_11" pos="0.0155 0 0">
-                                                            <joint name="bow_hair_11_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                            <joint name="bow_hair_11_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                            <geom name="bow_hair_geom_11" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                            <body name="bow_hair_12" pos="0.0155 0 0">
-                                                                <joint name="bow_hair_12_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                <joint name="bow_hair_12_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                <geom name="bow_hair_geom_12" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                <body name="bow_hair_13" pos="0.0155 0 0">
-                                                                    <joint name="bow_hair_13_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                    <joint name="bow_hair_13_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                    <geom name="bow_hair_geom_13" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                    <body name="bow_hair_14" pos="0.0155 0 0">
-                                                                        <joint name="bow_hair_14_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                        <joint name="bow_hair_14_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                        <geom name="bow_hair_geom_14" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                        <body name="bow_hair_15" pos="0.0155 0 0">
-                                                                            <joint name="bow_hair_15_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                            <joint name="bow_hair_15_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                            <geom name="bow_hair_geom_15" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                            <body name="bow_hair_16" pos="0.0155 0 0">
-                                                                                <joint name="bow_hair_16_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                                <joint name="bow_hair_16_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                                <geom name="bow_hair_geom_16" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                                <body name="bow_hair_17" pos="0.0155 0 0">
-                                                                                    <joint name="bow_hair_17_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                                    <joint name="bow_hair_17_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                                    <geom name="bow_hair_geom_17" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                                    <body name="bow_hair_18" pos="0.0155 0 0">
-                                                                                        <joint name="bow_hair_18_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                                        <joint name="bow_hair_18_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                                        <geom name="bow_hair_geom_18" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                                        <body name="bow_hair_19" pos="0.0155 0 0">
-                                                                                            <joint name="bow_hair_19_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                                            <joint name="bow_hair_19_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                                            <geom name="bow_hair_geom_19" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                                            <body name="bow_hair_20" pos="0.0155 0 0">
-                                                                                                <joint name="bow_hair_20_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                                                <joint name="bow_hair_20_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                                                <geom name="bow_hair_geom_20" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                                                <body name="bow_hair_21" pos="0.0155 0 0">
-                                                                                                    <joint name="bow_hair_21_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                                                    <joint name="bow_hair_21_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                                                    <geom name="bow_hair_geom_21" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                                                    <body name="bow_hair_22" pos="0.0155 0 0">
-                                                                                                        <joint name="bow_hair_22_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                                                        <joint name="bow_hair_22_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                                                        <geom name="bow_hair_geom_22" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                                                        <body name="bow_hair_23" pos="0.0155 0 0">
-                                                                                                            <joint name="bow_hair_23_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                                                            <joint name="bow_hair_23_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                                                            <geom name="bow_hair_geom_23" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                                                            <body name="bow_hair_24" pos="0.0155 0 0">
-                                                                                                                <joint name="bow_hair_24_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                                                                <joint name="bow_hair_24_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                                                                <geom name="bow_hair_geom_24" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                                                                <body name="bow_hair_25" pos="0.0155 0 0">
-                                                                                                                    <joint name="bow_hair_25_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                                                                    <joint name="bow_hair_25_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                                                                    <geom name="bow_hair_geom_25" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                                                                    <body name="bow_hair_26" pos="0.0155 0 0">
-                                                                                                                        <joint name="bow_hair_26_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                                                                        <joint name="bow_hair_26_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                                                                        <geom name="bow_hair_geom_26" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                                                                        <body name="bow_hair_27" pos="0.0155 0 0">
-                                                                                                                            <joint name="bow_hair_27_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                                                                            <joint name="bow_hair_27_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                                                                            <geom name="bow_hair_geom_27" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                                                                            <body name="bow_hair_28" pos="0.0155 0 0">
-                                                                                                                                <joint name="bow_hair_28_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                                                                                <joint name="bow_hair_28_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                                                                                <geom name="bow_hair_geom_28" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                                                                                <body name="bow_hair_29" pos="0.0155 0 0">
-                                                                                                                                    <joint name="bow_hair_29_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                                                                                    <joint name="bow_hair_29_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                                                                                    <geom name="bow_hair_geom_29" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                                                                                    <body name="bow_hair_30" pos="0.0155 0 0">
-                                                                                                                                        <joint name="bow_hair_30_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                                                                                        <joint name="bow_hair_30_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                                                                                        <geom name="bow_hair_geom_30" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                                                                                        <body name="bow_hair_31" pos="0.0155 0 0">
-                                                                                                                                            <joint name="bow_hair_31_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                                                                                            <joint name="bow_hair_31_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                                                                                            <geom name="bow_hair_geom_31" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                                                                                            <body name="bow_hair_32" pos="0.0155 0 0">
-                                                                                                                                                <joint name="bow_hair_32_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                                                                                                <joint name="bow_hair_32_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                                                                                                <geom name="bow_hair_geom_32" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                                                                                                <body name="bow_hair_33" pos="0.0155 0 0">
-                                                                                                                                                    <joint name="bow_hair_33_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                                                                                                    <joint name="bow_hair_33_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                                                                                                    <geom name="bow_hair_geom_33" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                                                                                                    <body name="bow_hair_34" pos="0.0155 0 0">
-                                                                                                                                                        <joint name="bow_hair_34_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                                                                                                        <joint name="bow_hair_34_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                                                                                                        <geom name="bow_hair_geom_34" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                                                                                                        <body name="bow_hair_35" pos="0.0155 0 0">
-                                                                                                                                                            <joint name="bow_hair_35_bend_y" type="hinge" axis="0 1 0" class="bow_hair"/>
-                                                                                                                                                            <joint name="bow_hair_35_bend_z" type="hinge" axis="0 0 1" class="bow_hair"/>
-                                                                                                                                                            <geom name="bow_hair_geom_35" class="bow_hair" fromto="0 0 0  0.0155 0 0" mass="0.000056"/>
-                                                                                                                                                        </body>
-                                                                                                                                                    </body>
-                                                                                                                                                </body>
-                                                                                                                                            </body>
-                                                                                                                                        </body>
-                                                                                                                                    </body>
-                                                                                                                                </body>
-                                                                                                                            </body>
-                                                                                                                        </body>
-                                                                                                                    </body>
-                                                                                                                </body>
-                                                                                                            </body>
-                                                                                                        </body>
-                                                                                                    </body>
-                                                                                                </body>
-                                                                                            </body>
-                                                                                        </body>
-                                                                                    </body>
-                                                                                </body>
-                                                                            </body>
-                                                                        </body>
-                                                                    </body>
-                                                                </body>
-                                                            </body>
-                                                        </body>
-                                                    </body>
-                                                </body>
-                                            </body>
-                                        </body>
-                                    </body>
-                                </body>
-                            </body>
-                        </body>
-                    </body>
-                </body>
+            <!-- Single rigid-body replacement for the old 36-link hinge chain
+                 (which itself replaced the original flexcomp "cable" strung
+                 between the frog and the tip). This is now ONE capsule body,
+                 "bow_hair", spanning the full former chain length
+                 (36 * 0.0155 m = 0.558 m) with the combined mass of all 36
+                 segments (36 * 0.000056 kg = 0.002016 kg). It carries a free
+                 joint (same role as bow_hair_0's old free joint), so it is
+                 an independent 6-DOF body positioned entirely by the
+                 "hair_to_frog" / "hair_to_tip" equality constraints in
+                 erhu.xml (still assumed to exist there; see the note above
+                 on making those two constraints compliant, which is now the
+                 ONLY source of "give" in the hair since there are no more
+                 interior hinges). Two sites mark the two ends
+                 ("bow_hair_frog_site" at the near/frog end, local origin;
+                 "bow_hair_tip_site" at the far/tip end, local x=0.558) for
+                 those equality constraints to anchor to. NOTE: erhu.xml's
+                 hair_to_frog/hair_to_tip <connect> elements must be updated
+                 to reference body="bow_hair" (both now point at the SAME
+                 body, just different anchor points) instead of the old
+                 bow_hair_0 / bow_hair_35 body names; that file was not
+                 provided alongside bow.xml/arm.xml so it could not be
+                 edited here. contype/conaffinity/friction/solref/solimp are
+                 carried over unchanged from the per-segment geoms. -->
+            <body name="bow_hair" pos="0.575 0 0.645">
+                <joint name="bow_hair_free" type="free" damping="0.0001"/>
+                <geom name="bow_hair_geom" class="bow_hair" fromto="0 0 0  0.558 0 0" mass="0.002016"/>
+                <site name="bow_hair_frog_site" pos="0 0 0" size="0.0005"/>
+                <site name="bow_hair_tip_site" pos="0.558 0 0" size="0.0005"/>
             </body>
         </worldbody>
     </mujoco>
