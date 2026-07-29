@@ -9,7 +9,7 @@
             <geom type="capsule"
                 rgba="0.2 0.5 0.8 1"
                 density="1000"
-                size="0.02"/>
+                size="0.02" contype="0" conaffinity="0"/>
             <position kp="5000" kv="50" ctrlrange="-3.14 3.14"/>
         </default>
     </default>
@@ -104,43 +104,18 @@
 
                                         <body name="bow_link_1" pos="-0 0 0.055" zaxis="-1 0 1">
                                             <joint name="bow_hinge_1" type="hinge" axis="1 0 0" class="bow_link"/>
-                                            <geom name="bow_geom_1" type="capsule" fromto="0 0 0  0 0 0.09" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.008"/>
+                                            <geom name="bow_geom_1" type="capsule" fromto="0 0 0  0 0 0.36" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.008" contype="1" conaffinity="1"/>
+                                            <body name="bow_link_7" pos="0 0 0.36">
+                                                <joint name="bow_hinge_7" type="hinge" axis="1 0 0" class="bow_link"/>
+                                                <geom name="bow_geom_7" type="capsule" fromto="0 0 0  -0.05 0 0.09" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.008"/>
 
-                                            <body name="bow_link_2" pos="0 0 0.09">
-                                                <joint name="bow_hinge_2" type="hinge" axis="1 0 0" class="bow_link"/>
-                                                <geom name="bow_geom_2" type="capsule" fromto="0 0 0  0 0 0.09" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.008"/>
-
-                                                <body name="bow_link_3" pos="0 0 0.09">
-                                                    <joint name="bow_hinge_3" type="hinge" axis="1 0 0" class="bow_link"/>
-                                                    <geom name="bow_geom_3" type="capsule" fromto="0 0 0  0 0 0.09" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.008"/>
-
-                                                    <body name="bow_link_4" pos="0 0 0.09">
-                                                        <joint name="bow_hinge_4" type="hinge" axis="1 0 0" class="bow_link"/>
-                                                        <geom name="bow_geom_4" type="capsule" fromto="0 0 0  0 0 0.09" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.008"/>
-
-                                                        <body name="bow_link_5" pos="0 0 0.09">
-                                                            <joint name="bow_hinge_5" type="hinge" axis="1 0 0" class="bow_link"/>
-                                                            <geom name="bow_geom_5" type="capsule" fromto="0 0 0  0 0 0.09" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.008"/>
-
-                                                            <body name="bow_link_6" pos="0 0 0.07">
-                                                                <joint name="bow_hinge_6" type="hinge" axis="1 0 0" class="bow_link"/>
-                                                                <geom name="bow_geom_6" type="capsule" fromto="0 0 0  0 0 0.02" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.008"/>
-
-                                                                <body name="bow_link_7" pos="0 0 0.02">
-                                                                    <joint name="bow_hinge_7" type="hinge" axis="1 0 0" class="bow_link"/>
-                                                                    <geom name="bow_geom_7" type="capsule" fromto="0 0 0  -0.05 0 0.09" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.008"/>
-
-                                                                    <body name="bow_tip" pos="-0.05 0 0.09">
-                                                                        <joint name="bow_hinge_8" type="hinge" axis="1 0 0" class="bow_link"/>
-                                                                        <geom name="bow_tip_geom" type="capsule" fromto="0 0 0  0 0 0.03" size="0.004" rgba="0.4 0.25 0.1 1" mass="0.004"/>
-                                                                        <site name="bow_tip_site" pos="0 0 0.03" size="0.003"/>
-                                                                    </body>
-                                                                </body>
-                                                            </body>
-                                                        </body>
-                                                    </body>
+                                                <body name="bow_tip" pos="-0.05 0 0.09">
+                                                    <joint name="bow_hinge_8" type="hinge" axis="1 0 0" class="bow_link"/>
+                                                    <geom name="bow_tip_geom" type="capsule" fromto="0 0 0  0 0 0.03" size="0.004" rgba="0.4 0.25 0.1 1" mass="0.004"/>
+                                                    <site name="bow_tip_site" pos="0 0 0.03" size="0.003"/>
                                                 </body>
                                             </body>
+                                           
                                         </body>
                                     </body>
 
