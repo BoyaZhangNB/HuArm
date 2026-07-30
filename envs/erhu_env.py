@@ -13,9 +13,6 @@ class ErhuEnv(MjxEnv):
     def __init__(self, n_frames: int = 4, **kwargs):
         super().__init__(xml_path="huarm/arm.xml", n_frames=n_frames, **kwargs)
         self.id_dict = None
-        # Lower constraint solver iterations for faster tracing
-        self.mj_model.opt.iterations = 4
-        self.mj_model.opt.ls_iterations = 4
         self.mj_model, self.mj_data = init_huarm(self.mj_model, self.mj_data)
         self.mjx_model = mjx.put_model(self.mj_model)
         self.mjx_data = mjx.put_data(self.mj_model, self.mj_data)

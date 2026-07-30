@@ -7,10 +7,10 @@ from example.example_agent import ReinforceAgent
 from envs.wrappers import AutoResetWrapper, EpisodeWrapper, VmapWrapper
 from envs.erhu_env import ErhuEnv
 
-NUM_ENVS = 4
+NUM_ENVS = 64
 EPISODE_LENGTH = 2000
 STEPS_PER_ITER = 2000
-NUM_ITERS = 1
+NUM_ITERS = 10
 FRAME_SKIP = 10 # control freq = 0.002 * 10 = 0.02s per step, 50Hz
 
 def main():
