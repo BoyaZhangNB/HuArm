@@ -76,8 +76,7 @@ class EpisodeWrapper(Wrapper):
     def reset(self, rng: jax.Array) -> State:
         state = self.env.reset(rng)
         state.info["steps"] = jp.asarray(0.0, dtype=jp.int32)
-        state.info["truncation"] = jp.asarray(0.0, dtype=jp.float32)
-        return state
+        return state.replace(truncation=jp.zeros_like(state.done))
 
     def step(self, state: State, action: jax.Array) -> State:
         def repeat_step(s, _):
@@ -94,8 +93,7 @@ class EpisodeWrapper(Wrapper):
         done = jp.where(episode_over, one, state.done)
 
         state.info["steps"] = steps
-        state.info["truncation"] = truncation
-        return state.replace(done=done)
+        return state.replace(done=done, truncation=truncation)
 
 
 class AutoResetWrapper(Wrapper):

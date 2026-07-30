@@ -45,6 +45,12 @@ class State:
                                        # it plays nicely with jax.lax.select)
     metrics: Dict[str, jax.Array] = struct.field(default_factory=dict)
     info: Dict[str, Any] = struct.field(default_factory=dict)
+    # 0./1. float flag: was `done` caused by hitting a step/time limit
+    # (e.g. EpisodeWrapper) rather than true task termination? Defaults to
+    # 0. so base envs that never truncate don't need to set it.
+    truncation: jax.Array = struct.field(
+        default_factory=lambda: jp.asarray(0.0, dtype=jp.float32)
+    )
 
 
 class MjxEnv(abc.ABC):

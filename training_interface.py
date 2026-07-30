@@ -39,6 +39,10 @@ class Transition:
     reward: jax.Array
     done: jax.Array
     next_obs: jax.Array
+    # 1./0. flag: was `done` caused by hitting the episode-length limit
+    # (EpisodeWrapper) rather than true termination? Needed to avoid treating
+    # the post-autoreset `next_obs` as a real terminal observation.
+    truncation: jax.Array
     extra: Dict[str, jax.Array] = struct.field(default_factory=dict)
 
 
@@ -87,6 +91,7 @@ def rollout(
             reward=next_state.reward,
             done=next_state.done,
             next_obs=next_state.obs,
+            truncation=next_state.truncation,
             extra=extra,
         )
         return (next_state, rng), transition
@@ -96,39 +101,52 @@ def rollout(
     )
     return state, transitions, rng
 
-def eval(env, agent, train_state, rng, n_episodes):
-    """Evaluate the agent for a number of episodes and return the average reward."""
+def eval(env, agent, train_state, rng, n_episodes, max_steps=2000):
+    """Evaluate the agent on a vectorized, autoresetting env until at least
+    `n_episodes` episodes have completed (across all parallel envs combined),
+    and return the mean episode return.
 
-    def scan_fn(carry, _):
-        rng, total_reward = carry
-        rng, reset_rng = jax.random.split(rng)
-        state = env.reset(reset_rng)
+    Only episodes that actually finish (done==1) are counted; any episode
+    still in progress when `max_steps` is hit is dropped so it can't bias
+    the average with a truncated, partial return.
+    """
 
-        def while_fn(carry):
-            rng, state, reward = carry
-            rng, act_rng = jax.random.split(rng)
-            action, _ = agent.act(train_state, state.obs, act_rng)
-            next_state = env.step(state, action)
-            reward += next_state.reward
-            return (rng, next_state, reward)
+    rng, reset_rng = jax.random.split(rng)
+    state = env.reset(reset_rng)
+    num_envs = state.done.shape[0]
 
-        def cond_fn(carry):
-            rng, state, reward = carry
-            return ~state.done
-        
-        r0 = jp.asarray(0.0, dtype=jp.float32)
+    ep_return = jp.zeros(num_envs, dtype=jp.float32)
+    return_sum = jp.zeros((), dtype=jp.float32)
+    episode_count = jp.zeros((), dtype=jp.int32)
+    step = jp.zeros((), dtype=jp.int32)
 
-        init_while = (rng, state, r0)
-        rng, final_state, episode_reward = jax.lax.while_loop(cond_fn, while_fn, init_while)
+    def cond_fn(carry):
+        *_, episode_count, step = carry
+        return jp.logical_and(episode_count < n_episodes, step < max_steps)
 
-        return (rng, total_reward + episode_reward), None
+    def body_fn(carry):
+        state, rng, ep_return, return_sum, episode_count, step = carry
 
-    total_reward = jp.asarray(0.0, dtype=jp.float32)
+        rng, act_rng = jax.random.split(rng)
+        action, _ = agent.act(train_state, state.obs, act_rng)
+        state = env.step(state, action)
 
-    (rng, total_reward), _ = jax.lax.scan(scan_fn, (rng, total_reward), None, length=n_episodes)
+        ep_return = ep_return + state.reward
+        done = state.done > 0
 
-    avg_reward = total_reward / n_episodes
-    return avg_reward
+        return_sum = return_sum + jp.sum(jp.where(done, ep_return, 0.0))
+        episode_count = episode_count + jp.sum(done, dtype=jp.int32)
+        ep_return = jp.where(done, 0.0, ep_return)
+
+        return state, rng, ep_return, return_sum, episode_count, step + 1
+
+    state, rng, ep_return, return_sum, episode_count, step = jax.lax.while_loop(
+        cond_fn,
+        body_fn,
+        (state, rng, ep_return, return_sum, episode_count, step),
+    )
+
+    return return_sum / jp.maximum(episode_count, 1)
 
 def train(
     env: MjxEnv,
@@ -136,6 +154,7 @@ def train(
     rng: jax.Array,
     num_iterations: int,
     steps_per_iteration: int,
+    eval_interval: int,
     log_fn: Callable[[int, Dict[str, jax.Array]], None] = lambda i, m: None,
 ) -> Any:
     """Generic train loop: rollout -> update -> repeat. Swap `agent` to
@@ -150,16 +169,20 @@ def train(
                     env, agent, train_state, state, rng, steps_per_iteration
                 )
         train_state, metrics = agent.update(train_state, batch)
-        eval_reward = eval(env, agent, train_state, rng, n_episodes=5)
-        metrics['eval_reward'] = eval_reward
         return train_state, state, rng, metrics
 
     _train_step = jax.jit(_train_step)
+    _eval = jax.jit(eval)
 
     for it in tqdm(range(num_iterations), desc="Training", unit="iter"):
         try:
             train_state, state, rng, metrics = _train_step(train_state, state, rng)
             log_fn(it, metrics)
+
+            if it % eval_interval == 0:
+                eval_reward = _eval(env, agent, train_state, rng, n_episodes=30)
+                metrics['eval_reward'] = eval_reward
+
         except KeyboardInterrupt:
             print("Training interrupted by user.")
             break

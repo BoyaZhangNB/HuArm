@@ -35,6 +35,7 @@ def main():
         rng=jax.random.PRNGKey(0),
         num_iterations=NUM_ITERS,
         steps_per_iteration=STEPS_PER_ITER,
+        eval_interval=3,
         log_fn=log_fn,
     )
     params = train_state["params"]
@@ -48,5 +49,4 @@ def main():
 
 
 if __name__ == "__main__":
-    # jax.config.update('jax_platform_name', 'cpu')
     main()
