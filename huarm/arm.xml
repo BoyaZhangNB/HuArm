@@ -1,7 +1,6 @@
 <mujoco model="simple_arm">
 
     <compiler angle="degree"/>
-    <option gravity="0 0 -9.81"/>
 
     <default>
         <default class="arm">
@@ -21,7 +20,7 @@
     </default>
 
     <worldbody>
-        <body name="base" pos="0.3 -0.3 1" childclass="arm" euler="0 0 -1.5708">
+        <body name="base" pos="0.3 -0.3 1" childclass="arm" euler="0 0 -2.3708">
             <geom type="sphere"
                   size="0.05 0.05"
                   rgba="0.3 0.3 0.3 1"/>

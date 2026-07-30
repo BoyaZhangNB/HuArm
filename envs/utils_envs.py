@@ -8,7 +8,6 @@ import mujoco
 import numpy as np
 
 
-
 def get_string_contact_point(model, data, string_body_name):
     """
     Returns the world position of the free (bottom) end of a string capsule.
@@ -32,27 +31,35 @@ def between_strings_target(model, data):
     midpoint[2] = max(midpoint[2], sound_box_top_z) + 0.01  # 1 cm clearance
     return midpoint
 
-
-def weighted_point_and_jacobian(model, data, body_weights, dof_idxs):
+def weighted_point_and_jacobian(model, data, body_points, dof_idxs):
     """
-    Computes weighted-average world position and position Jacobian for given bodies.
+    Computes weighted-average world position and position Jacobian for given
+    (body_name, local_offset, weight) triples. local_offset is a 3-vector in
+    the body's own local frame, letting the target point be somewhere other
+    than the body origin (e.g. the midpoint of a capsule that is welded to,
+    but geometrically offset/rotated from, the body it's attached to).
     """
     point = np.zeros(3)
     J = np.zeros((3, len(dof_idxs)))
-    for name, w in body_weights:
+    for name, local_offset, w in body_points:
         bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name)
-        point += w * data.xpos[bid]
+        xmat = data.xmat[bid].reshape(3, 3)
+        world_pt = data.xpos[bid] + xmat @ local_offset
+        point += w * world_pt
         jacp = np.zeros((3, model.nv))
         jacr = np.zeros((3, model.nv))
-        mujoco.mj_jac(model, data, jacp, jacr, data.xpos[bid], bid)
+        mujoco.mj_jac(model, data, jacp, jacr, world_pt, bid)
         J += w * jacp[:, dof_idxs]
     return point, J
 
 
-def jacobian_ik(model, data, body_weights, target_pos, joint_names,
+def jacobian_ik(model, data, body_points, target_pos, joint_names,
                 max_iters=200, damping=1e-2, step_clip=0.1, tol=1e-4):
     """
-    Damped-least-squares IK to position specified target body combination.
+    Damped-least-squares IK to position specified target point combination.
+
+    body_points is a list of (body_name, local_offset, weight) triples, see
+    weighted_point_and_jacobian.
     """
     dof_idxs = [model.jnt_dofadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn)]
                 for jn in joint_names]
@@ -61,7 +68,7 @@ def jacobian_ik(model, data, body_weights, target_pos, joint_names,
 
     for it in range(max_iters):
         mujoco.mj_forward(model, data)
-        point, J = weighted_point_and_jacobian(model, data, body_weights, dof_idxs)
+        point, J = weighted_point_and_jacobian(model, data, body_points, dof_idxs)
         err = target_pos - point
         err_norm = np.linalg.norm(err)
         if err_norm < tol:
@@ -75,7 +82,7 @@ def jacobian_ik(model, data, body_weights, target_pos, joint_names,
             data.qpos[qidx] += d
 
     mujoco.mj_forward(model, data)
-    point, _ = weighted_point_and_jacobian(model, data, body_weights, dof_idxs)
+    point, _ = weighted_point_and_jacobian(model, data, body_points, dof_idxs)
     return max_iters, np.linalg.norm(target_pos - point)
 
 
@@ -115,15 +122,17 @@ def insert_hair_between_strings(model, data, arm_joint_names=("joint1", "joint2"
     target = between_strings_target(model, data)
     print(f"Target insertion point (between strings, above sound box): {target}")
 
-    body_weights = [("bow_link_0", 0.5), ("bow_tip", 0.5)]
-    iters, err = jacobian_ik(model, data, body_weights, target, list(arm_joint_names))
+    hair_midpoint_local = np.array([0.0, 0.0, -0.25])
+    body_points = [("bow_hair", hair_midpoint_local, 1.0)]
+    iters, err = jacobian_ik(model, data, body_points, target, list(arm_joint_names))
     print(f"Arm IK converged in {iters} iterations, final position error {err:.6f} m")
     set_joint_ctrl(model, data, arm_joint_names)
 
-    bow_link_0_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "bow_link_0")
-    bow_tip_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "bow_tip")
-    midpoint = 0.5 * (data.xpos[bow_link_0_id] + data.xpos[bow_tip_id])
-    print(f"Bow midpoint after IK: {midpoint} (target residual: {np.linalg.norm(midpoint - target):.4f} m)")
+    bow_hair_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "bow_hair")
+    xmat = data.xmat[bow_hair_id].reshape(3, 3)
+    midpoint = data.xpos[bow_hair_id] + xmat @ hair_midpoint_local
+    print(f"Bow hair midpoint after IK: {midpoint} (target residual: {np.linalg.norm(midpoint - target):.4f} m)")
+
 
 
 def init_huarm(model, data, id_dict=None):
