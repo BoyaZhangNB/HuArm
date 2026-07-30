@@ -3,7 +3,7 @@ import orbax.checkpoint as ocp
 from pathlib import Path
 
 from training_interface import train
-from example.example_agent import ReinforceAgent
+from agent import PPOAgent
 from envs.wrappers import AutoResetWrapper, EpisodeWrapper, VmapWrapper
 from envs.erhu_env import ErhuEnv
 
@@ -22,7 +22,7 @@ def main():
 
     # 2. Build any agent satisfying the Agent protocol -- fully decoupled
     #    from the env/model above.
-    agent = ReinforceAgent(obs_size=env.observation_size, action_size=env.action_size)
+    agent = PPOAgent(obs_size=env.observation_size, action_size=env.action_size)
 
     # 3. Train. Swapping `agent` swaps the whole algorithm; swapping the
     #    env class swaps the whole task/robot. Neither affects the other.
