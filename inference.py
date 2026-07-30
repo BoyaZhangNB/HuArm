@@ -4,7 +4,7 @@ from pathlib import Path
 import mujoco
 import time
 
-from example.example_agent import ReinforceAgent
+from agent import PPOAgent
 from envs.erhu_env import ErhuEnv
 
 path = Path('checkpoints/model_latest').resolve()
@@ -12,7 +12,7 @@ checkpointer = ocp.StandardCheckpointer()
 
 env = ErhuEnv()
 
-agent = ReinforceAgent(obs_size=env.observation_size, action_size=env.action_size)
+agent = PPOAgent(obs_size=env.observation_size, action_size=env.action_size)
 
 FRAME_SKIP = 40
 

@@ -42,7 +42,8 @@ class ErhuEnv(MjxEnv):
 
     def step(self, state: State, action: jax.Array) -> State:
         action = jp.clip(action, -1.0, 1.0)
-        data = self.pipeline_step(state.pipeline_state, action)
+        ctrl = state.pipeline_state.ctrl + action
+        data = self.pipeline_step(state.pipeline_state, ctrl)
         
         info: Dict[str, Any] = state.info.copy()
         obs = self._get_obs(data, info)
