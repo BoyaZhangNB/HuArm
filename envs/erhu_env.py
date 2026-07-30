@@ -17,7 +17,7 @@ class ErhuEnv(MjxEnv):
         self.mjx_model = mjx.put_model(self.mj_model)
         self.mjx_data = mjx.put_data(self.mj_model, self.mj_data)
 
-        self.terminal_condition = 30 # 30 seconds
+        self.terminal_condition = 100 # 30 seconds
 
     def reset(self, rng: jax.Array) -> State:
         rng, env_rng= jax.random.split(rng, 2)

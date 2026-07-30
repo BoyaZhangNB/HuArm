@@ -27,7 +27,8 @@ def main():
     # 3. Train. Swapping `agent` swaps the whole algorithm; swapping the
     #    env class swaps the whole task/robot. Neither affects the other.
     def log_fn(it, metrics):
-        print(f"iter {it:3d}  loss={float(metrics['loss']):.4f} eval_reward={float(metrics['eval_reward']):.4f}")
+        eval_reward = metrics.get("eval_reward", float("nan"))
+        print(f"iter {it:3d}  loss={float(metrics['loss']):.4f} eval_reward={float(eval_reward):.4f}")
 
     train_state = train(
         env=env,

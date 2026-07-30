@@ -11,6 +11,7 @@ MUJOCO_LOG.TXT
 
 # models
 checkpoints/
+Archive.zip
 
 # Distribution / packaging
 .Python

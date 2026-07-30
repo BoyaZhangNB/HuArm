@@ -110,7 +110,13 @@ class AutoResetWrapper(Wrapper):
 
     def step(self, state: State, action: jax.Array) -> State:
         # clear `done` before stepping so the wrapped env doesn't see a
-        # stale terminal flag from the previous transition
+        # stale terminal flag from the previous transition, and reset the
+        # episode step counter for envs that just finished so EpisodeWrapper
+        # doesn't see a stale (already over-threshold) step count and mark
+        # every subsequent step done again.
+        if "steps" in state.info:
+            steps = jp.where(state.done, jp.zeros_like(state.info["steps"]), state.info["steps"])
+            state.info["steps"] = steps
         state = state.replace(done=jp.zeros_like(state.done))
         state = self.env.step(state, action)
 

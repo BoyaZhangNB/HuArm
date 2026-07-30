@@ -106,12 +106,19 @@ class PPOAgent(Agent):
         return {"params": params, "opt_state": opt_state, "rng": rng}
 
     def act(
-        self, train_state: Any, obs: jax.Array, rng: jax.Array
+        self,
+        train_state: Any,
+        obs: jax.Array,
+        rng: jax.Array,
+        deterministic: bool = False,
     ) -> Tuple[jax.Array, Dict[str, jax.Array]]:
         mean, log_std, value = self.net.apply(train_state["params"], obs)
-        std = jp.exp(log_std)
-        noise = jax.random.normal(rng, mean.shape)
-        action = mean + noise * std
+        if deterministic:
+            action = mean
+        else:
+            std = jp.exp(log_std)
+            noise = jax.random.normal(rng, mean.shape)
+            action = mean + noise * std
         log_prob = _gaussian_log_prob(action, mean, log_std)
         return action, {"log_prob": log_prob, "value": value}
 

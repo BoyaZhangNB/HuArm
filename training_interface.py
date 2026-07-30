@@ -56,9 +56,15 @@ class Agent(Protocol):
         ...
 
     def act(
-        self, train_state: Any, obs: jax.Array, rng: jax.Array
+        self,
+        train_state: Any,
+        obs: jax.Array,
+        rng: jax.Array,
+        deterministic: bool = False,
     ) -> Tuple[jax.Array, Dict[str, jax.Array]]:
-        """Return (action, extra_info) given a batch of observations."""
+        """Return (action, extra_info) given a batch of observations.
+        `deterministic=True` should return the policy's greedy/mean action
+        (no exploration noise), for evaluation."""
         ...
 
     def update(
@@ -128,7 +134,7 @@ def eval(env, agent, train_state, rng, n_episodes, max_steps=2000):
         state, rng, ep_return, return_sum, episode_count, step = carry
 
         rng, act_rng = jax.random.split(rng)
-        action, _ = agent.act(train_state, state.obs, act_rng)
+        action, _ = agent.act(train_state, state.obs, act_rng, deterministic=True)
         state = env.step(state, action)
 
         ep_return = ep_return + state.reward
@@ -184,7 +190,7 @@ def train(
 
             if it % eval_interval == 0:
                 eval_reward = _eval(train_state, rng)
-                metrics['eval_reward'] = eval_reward
+                metrics["eval_reward"] = eval_reward
 
             log_fn(it, metrics)
     except KeyboardInterrupt:
