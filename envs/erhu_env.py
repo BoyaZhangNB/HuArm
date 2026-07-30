@@ -28,7 +28,7 @@ class ErhuEnv(MjxEnv):
 
         info: Dict[str, Any] = {}
         obs = self._get_obs(data, info)
-        reward, done = jp.zeros(()), jp.zeros(())
+        reward, done = jp.asarray(0.0, dtype=jp.float32), jp.asarray(0.0, dtype=jp.float32)
         qpos = data.qpos
         metrics = {"joint_positions": qpos}
         return State(data, obs, reward, done, metrics, info)

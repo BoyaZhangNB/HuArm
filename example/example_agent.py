@@ -48,7 +48,7 @@ class ReinforceAgent(Agent):
         self.optimizer = optax.adam(lr)
 
     def init(self, rng: jax.Array) -> Any:
-        dummy_obs = jp.zeros((self.obs_size,))
+        dummy_obs = jp.zeros((self.obs_size,), dtype=jp.float32)
         params = self.net.init(rng, dummy_obs)
         opt_state = self.optimizer.init(params)
         return {"params": params, "opt_state": opt_state}

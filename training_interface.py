@@ -96,6 +96,39 @@ def rollout(
     )
     return state, transitions, rng
 
+def eval(env, agent, train_state, rng, n_episodes):
+    """Evaluate the agent for a number of episodes and return the average reward."""
+
+    def scan_fn(carry, _):
+        rng, total_reward = carry
+        rng, reset_rng = jax.random.split(rng)
+        state = env.reset(reset_rng)
+
+        def while_fn(carry):
+            rng, state, reward = carry
+            rng, act_rng = jax.random.split(rng)
+            action, _ = agent.act(train_state, state.obs, act_rng)
+            next_state = env.step(state, action)
+            reward += next_state.reward
+            return (rng, next_state, reward)
+
+        def cond_fn(carry):
+            rng, state, reward = carry
+            return ~state.done
+        
+        r0 = jp.asarray(0.0, dtype=jp.float32)
+
+        init_while = (rng, state, r0)
+        rng, final_state, episode_reward = jax.lax.while_loop(cond_fn, while_fn, init_while)
+
+        return (rng, total_reward + episode_reward), None
+
+    total_reward = jp.asarray(0.0, dtype=jp.float32)
+
+    (rng, total_reward), _ = jax.lax.scan(scan_fn, (rng, total_reward), None, length=n_episodes)
+
+    avg_reward = total_reward / n_episodes
+    return avg_reward
 
 def train(
     env: MjxEnv,
@@ -117,21 +150,18 @@ def train(
                     env, agent, train_state, state, rng, steps_per_iteration
                 )
         train_state, metrics = agent.update(train_state, batch)
+        eval_reward = eval(env, agent, train_state, rng, n_episodes=5)
+        metrics['eval_reward'] = eval_reward
         return train_state, state, rng, metrics
 
     _train_step = jax.jit(_train_step)
 
     for it in tqdm(range(num_iterations), desc="Training", unit="iter"):
-        t0 = time.perf_counter()
-
-        train_state, state, rng, metrics = _train_step(train_state, state, rng)
-
-        # Force sync to get accurate wall-clock execution time
-        jax.block_until_ready(metrics)
-        step_time = time.perf_counter() - t0
-
-        if it == 0:
-            print(f"\n[Iteration 0] Compilation + Execution time: {step_time:.4f}s")
-        log_fn(it, metrics)
+        try:
+            train_state, state, rng, metrics = _train_step(train_state, state, rng)
+            log_fn(it, metrics)
+        except KeyboardInterrupt:
+            print("Training interrupted by user.")
+            break
 
     return train_state

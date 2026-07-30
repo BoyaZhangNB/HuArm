@@ -11,7 +11,7 @@ NUM_ENVS = 64
 EPISODE_LENGTH = 2000
 STEPS_PER_ITER = 2000
 NUM_ITERS = 10
-FRAME_SKIP = 10 # control freq = 0.002 * 10 = 0.02s per step, 50Hz
+FRAME_SKIP = 20 # control freq = 0.002 * 10 = 0.02s per step, 50Hz
 
 def main():
     # 1. Build the env: task-specific model wrapped with reusable infra.
@@ -27,7 +27,7 @@ def main():
     # 3. Train. Swapping `agent` swaps the whole algorithm; swapping the
     #    env class swaps the whole task/robot. Neither affects the other.
     def log_fn(it, metrics):
-        print(f"iter {it:3d}  loss={float(metrics['loss']):.4f}")
+        print(f"iter {it:3d}  loss={float(metrics['loss']):.4f} eval_reward={float(metrics['eval_reward']):.4f}")
 
     train_state = train(
         env=env,
@@ -40,6 +40,7 @@ def main():
     params = train_state["params"]
 
     # Save parameters
+    print("Saving model parameters...")
     checkpointer = ocp.StandardCheckpointer()
     path = Path('checkpoints/model_latest').resolve()
     checkpointer.save(path, params)

@@ -75,8 +75,8 @@ class EpisodeWrapper(Wrapper):
 
     def reset(self, rng: jax.Array) -> State:
         state = self.env.reset(rng)
-        state.info["steps"] = jp.zeros(())
-        state.info["truncation"] = jp.zeros(())
+        state.info["steps"] = jp.asarray(0.0, dtype=jp.int32)
+        state.info["truncation"] = jp.asarray(0.0, dtype=jp.float32)
         return state
 
     def step(self, state: State, action: jax.Array) -> State:
@@ -86,8 +86,8 @@ class EpisodeWrapper(Wrapper):
         state, _ = jax.lax.scan(repeat_step, state, None, length=self.action_repeat)
 
         steps = state.info["steps"] + self.action_repeat
-        one = jp.ones_like(state.done)
-        zero = jp.zeros_like(state.done)
+        one = jp.ones_like(state.done, dtype=jp.float32)
+        zero = jp.zeros_like(state.done, dtype=jp.float32)
         episode_over = steps >= self.episode_length
         not_already_done = state.done == 0
         truncation = jp.where(episode_over & not_already_done, one, zero)
