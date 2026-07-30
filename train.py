@@ -1,19 +1,21 @@
 import jax
+import orbax.checkpoint as ocp
+from pathlib import Path
 
 from training_interface import train
 from example.example_agent import ReinforceAgent
 from envs.wrappers import AutoResetWrapper, EpisodeWrapper, VmapWrapper
 from envs.erhu_env import ErhuEnv
 
-NUM_ENVS = 64
+NUM_ENVS = 4
 EPISODE_LENGTH = 2000
 STEPS_PER_ITER = 2000
-NUM_ITERS = 10
-
+NUM_ITERS = 1
+FRAME_SKIP = 10 # control freq = 0.002 * 10 = 0.02s per step, 50Hz
 
 def main():
     # 1. Build the env: task-specific model wrapped with reusable infra.
-    env = ErhuEnv(n_frames=40)
+    env = ErhuEnv(n_frames=FRAME_SKIP)
     env = EpisodeWrapper(env, episode_length=EPISODE_LENGTH)
     env = AutoResetWrapper(env)
     env = VmapWrapper(env, num_envs=NUM_ENVS)
@@ -27,7 +29,7 @@ def main():
     def log_fn(it, metrics):
         print(f"iter {it:3d}  loss={float(metrics['loss']):.4f}")
 
-    train(
+    train_state = train(
         env=env,
         agent=agent,
         rng=jax.random.PRNGKey(0),
@@ -35,6 +37,13 @@ def main():
         steps_per_iteration=STEPS_PER_ITER,
         log_fn=log_fn,
     )
+    params = train_state["params"]
+
+    # Save parameters
+    checkpointer = ocp.StandardCheckpointer()
+    path = Path('checkpoints/model_latest').resolve()
+    checkpointer.save(path, params)
+    checkpointer.wait_until_finished() 
 
 
 if __name__ == "__main__":
