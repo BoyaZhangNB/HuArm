@@ -174,17 +174,15 @@ def train(
     _train_step = jax.jit(_train_step)
     _eval = jax.jit(eval)
 
-    for it in tqdm(range(num_iterations), desc="Training", unit="iter"):
-        try:
+    try:
+        for it in tqdm(range(num_iterations), desc="Training", unit="iter"):
             train_state, state, rng, metrics = _train_step(train_state, state, rng)
             log_fn(it, metrics)
 
             if it % eval_interval == 0:
                 eval_reward = _eval(env, agent, train_state, rng, n_episodes=30)
                 metrics['eval_reward'] = eval_reward
-
-        except KeyboardInterrupt:
-            print("Training interrupted by user.")
-            break
+    except KeyboardInterrupt:
+        print("\n[WARNING] Training interrupted by user.")
 
     return train_state
