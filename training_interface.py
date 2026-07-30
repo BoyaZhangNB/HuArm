@@ -112,12 +112,19 @@ def train(
     train_state = agent.init(init_rng)
     state = env.reset(reset_rng)
 
+    def _train_step(train_state, state, rng):
+        state, batch, rng = rollout(
+                    env, agent, train_state, state, rng, steps_per_iteration
+                )
+        train_state, metrics = agent.update(train_state, batch)
+        return train_state, state, rng, metrics
+
+    _train_step = jax.jit(_train_step)
+
     for it in tqdm(range(num_iterations), desc="Training", unit="iter"):
         t0 = time.perf_counter()
-        state, batch, rng = rollout(
-            env, agent, train_state, state, rng, steps_per_iteration
-        )
-        train_state, metrics = agent.update(train_state, batch)
+
+        train_state, state, rng, metrics = _train_step(train_state, state, rng)
 
         # Force sync to get accurate wall-clock execution time
         jax.block_until_ready(metrics)
