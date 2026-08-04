@@ -1,6 +1,6 @@
 <mujoco model="simple_arm">
 
-    <compiler angle="degree"/>
+    <compiler angle="degree" autolimits="true"/>
 
     <default>
         <default class="arm">
@@ -106,10 +106,10 @@
 
     <actuator>
 
-        <position joint="joint1"/>
-        <position joint="joint2"/>
-        <position joint="joint3"/>
-        <position joint="joint4"/>
+        <position joint="joint1" class="arm"/>
+        <position joint="joint2" class="arm"/>
+        <position joint="joint3" class="arm"/>
+        <position joint="joint4" class="arm"/>
 
     </actuator>
 
