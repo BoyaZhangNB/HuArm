@@ -3,6 +3,7 @@ import jax.numpy as jp
 
 import mujoco
 from mujoco import mjx
+from mujoco.mjx._src import support as mjx_support
 from .mjx_env import MjxEnv, State
 from .utils_envs import init_huarm
 
@@ -108,7 +109,7 @@ class ErhuEnv(MjxEnv):
         f_max: float = 30.0,
         f_safe: float = 15.0,
         clip_penetration_limit: float = 0.01,
-        string_tolerance: float = 0.01,
+        string_tolerance: float = 0.2,
         forbidden_margin: float = 0.02,
         contact_duration_scale: float = 20.0,
         reward_weights: Dict[str, float] = None,
@@ -174,6 +175,12 @@ class ErhuEnv(MjxEnv):
         self._force_adr = int(m.sensor_adr[sensor_id])
         self._force_dim = int(m.sensor_dim[sensor_id])
 
+        # Number of contact slots mjx allocates per step -- static (fixed by
+        # the model), so it's safe to unroll a Python loop over it inside
+        # jit when reading per-contact forces (mjx.contact_force takes a
+        # concrete/static contact index, not a traced one).
+        self._ncon = int(_get_contact(self.mjx_data).geom.shape[0])
+
         self._sound_box_radius = float(m.geom_size[self._sound_box_geom_id][0])
         self._ctrl_lo = self.mjx_model.actuator_ctrlrange[:, 0]
         self._ctrl_hi = self.mjx_model.actuator_ctrlrange[:, 1]
@@ -232,6 +239,39 @@ class ErhuEnv(MjxEnv):
         min_dist = jp.min(jp.where(active, dist, jp.inf))
         return touching, min_dist
 
+    def _contact_force_mags(self, data: mjx.Data) -> jax.Array:
+        """Per-contact-slot linear contact force magnitude, shape (ncon,).
+
+        Unlike the `bow_arm_contact` force sensor (which only reports force
+        transmitted through the bow's mounting site), this reads the actual
+        constraint force resolved for every active contact in the scene, so
+        it reflects the true maximum contact force regardless of where it
+        occurs. Inactive contact slots come back as zero force.
+        """
+        forces = [
+            mjx_support.contact_force(self.mjx_model, data, i)[:3]
+            for i in range(self._ncon)
+        ]
+        return jp.linalg.norm(jp.stack(forces), axis=-1)
+
+    def _max_contact_force(self, data: mjx.Data) -> jax.Array:
+        """Largest contact force magnitude among ALL active contacts."""
+        return jp.max(self._contact_force_mags(data), initial=0.0)
+
+    def _bow_hair_a_string_force(self, data: mjx.Data) -> jax.Array:
+        """Contact force magnitude between the bow hair and the A-string
+        specifically -- this is the bow-mount pressure the player controls
+        when bowing that string."""
+        contact = _get_contact(data)
+        g1, g2 = contact.geom[:, 0], contact.geom[:, 1]
+        is_pair = (
+            (g1 == self._bow_hair_geom_id) & (g2 == self._string_a_geom_id)
+        ) | (
+            (g2 == self._bow_hair_geom_id) & (g1 == self._string_a_geom_id)
+        )
+        mags = jp.where(is_pair, self._contact_force_mags(data), 0.0)
+        return jp.max(mags, initial=0.0)
+
     # ------------------------------------------------------------------
     def reset(self, rng: jax.Array) -> State:
         rng, env_rng = jax.random.split(rng, 2)
@@ -255,6 +295,8 @@ class ErhuEnv(MjxEnv):
         metrics = {
             "joint_positions": data.qpos,
             "force_mag": jp.asarray(0.0, dtype=jp.float32),
+            "max_contact_force": jp.asarray(0.0, dtype=jp.float32),
+            "bow_a_force": jp.asarray(0.0, dtype=jp.float32),
             "velocity_error": jp.asarray(0.0, dtype=jp.float32),
             "pressure_error": jp.asarray(0.0, dtype=jp.float32),
             "contact": jp.asarray(0.0, dtype=jp.float32),
@@ -303,6 +345,8 @@ class ErhuEnv(MjxEnv):
     def _step_kinematics(self, data: mjx.Data, info: Dict[str, Any]) -> Dict[str, jax.Array]:
         force = data.sensordata[self._force_adr:self._force_adr + self._force_dim]
         force_mag = jp.linalg.norm(force)
+        max_contact_force = self._max_contact_force(data)
+        bow_a_force = self._bow_hair_a_string_force(data)
 
         frog, tip, mid, bow_axis = self._bow_geometry(data)
         bow_vel_world = (mid - info["prev_bow_mid"]) / self.dt
@@ -322,6 +366,8 @@ class ErhuEnv(MjxEnv):
         return dict(
             force=force,
             force_mag=force_mag,
+            max_contact_force=max_contact_force,
+            bow_a_force=bow_a_force,
             mid=mid,
             bow_axis=bow_axis,
             lateral_vel=lateral_vel,
@@ -343,8 +389,8 @@ class ErhuEnv(MjxEnv):
         return -jp.square(k["lateral_vel"] - k["desired_velocity"])
 
     def _reward_pressure(self, k: Dict[str, jax.Array]) -> jax.Array:
-        """Tracking accuracy: bow-mount force magnitude vs. desired pressure."""
-        return -jp.square(k["force_mag"] - k["desired_pressure"])
+        """Tracking accuracy: bow-hair/A-string contact force vs. desired pressure."""
+        return -jp.square(k["bow_a_force"] - k["desired_pressure"])
 
     def _reward_contact_duration(self, k: Dict[str, jax.Array]) -> jax.Array:
         """Bonus for sustained (not just momentary) hair-string contact."""
@@ -372,8 +418,9 @@ class ErhuEnv(MjxEnv):
         return -jp.square(jp.maximum(0.0, string_dist - self.string_tolerance))
 
     def _reward_contact_penalty(self, k: Dict[str, jax.Array]) -> jax.Array:
-        """Penalize bow-mount force above the soft safety threshold `f_safe`."""
-        return -jp.square(jp.maximum(0.0, k["force_mag"] - self.f_safe))
+        """Penalize the largest contact force in the scene above the soft
+        safety threshold `f_safe` (not just force at the bow-mount sensor)."""
+        return -jp.square(jp.maximum(0.0, k["max_contact_force"] - self.f_safe))
 
     def _reward_forbidden(self, k: Dict[str, jax.Array]) -> jax.Array:
         """Penalize approaching the forbidden volume. Inert if disabled."""
@@ -400,7 +447,7 @@ class ErhuEnv(MjxEnv):
     # Termination categories.
     # ------------------------------------------------------------------
     def _termination(self, data: mjx.Data, k: Dict[str, jax.Array]) -> jax.Array:
-        force_exceeded = k["force_mag"] > self.f_max
+        force_exceeded = k["max_contact_force"] > self.f_max
         bow_crossed_strings = k["touching"] & (k["min_dist"] < -self.clip_penetration_limit)
         if self.enable_forbidden_zone:
             entered_forbidden = k["forbidden_dist"] < 0.0
@@ -439,6 +486,8 @@ class ErhuEnv(MjxEnv):
         metrics = {
             "joint_positions": data.qpos,
             "force_mag": k["force_mag"],
+            "max_contact_force": k["max_contact_force"],
+            "bow_a_force": k["bow_a_force"],
             "velocity_error": -terms["velocity"],
             "pressure_error": -terms["pressure"],
             "contact": k["touching"].astype(jp.float32),
