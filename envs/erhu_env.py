@@ -112,7 +112,7 @@ class ErhuEnv(MjxEnv):
         string_tolerance: float = 0.15,
         forbidden_margin: float = 0.1,
         contact_duration_scale: float = 20.0,
-        velocity_kernel_scale: float = 400.0, # corresopnd to accpetable error of 0.05 [m/s].
+        velocity_kernel_scale: float = 20.0, # corresopnd to accpetable error of 0.05 [m/s].
         pressure_kernel_scale: float = 1.0, # corresopnd to accpetable error of 1 [N].
         reward_weights: Dict[str, float] = None,
         **kwargs,
@@ -139,7 +139,7 @@ class ErhuEnv(MjxEnv):
             velocity=1.0,
             pressure=1.0,
             contact_duration=0.5,
-            action_smoothness=0.05,
+            action_smoothness=0.5,
             bow_flat=0.2,
             bow_touch=0.2,
             string_center=0.5,
@@ -390,13 +390,13 @@ class ErhuEnv(MjxEnv):
     # ------------------------------------------------------------------
     def _reward_velocity(self, k: Dict[str, jax.Array]) -> jax.Array:
         """Tracking accuracy: lateral bow velocity (erhu-local frame) vs. desired velocity."""
-        err_sq = jp.square(k["lateral_vel"] - k["desired_velocity"]) * self.velocity_kernel_scale
-        return 1.0 / (1.0 + err_sq)
+        err = (k["lateral_vel"] - k["desired_velocity"]) * self.velocity_kernel_scale
+        return 1.0 / (1.0 + jp.square(err))
 
     def _reward_pressure(self, k: Dict[str, jax.Array]) -> jax.Array:
         """Tracking accuracy: bow-hair/A-string contact force vs. desired pressure."""
-        err_sq = jp.square(k["bow_a_force"] - k["desired_pressure"]) * self.pressure_kernel_scale
-        return 1.0 / (1.0 + err_sq)
+        err = (k["bow_a_force"] - k["desired_pressure"]) * self.pressure_kernel_scale
+        return 1.0 / (1.0 + jp.square(err))
 
     def _reward_contact_duration(self, k: Dict[str, jax.Array]) -> jax.Array:
         """Bonus for sustained (not just momentary) hair-string contact."""
