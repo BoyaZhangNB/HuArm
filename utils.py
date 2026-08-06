@@ -1,3 +1,4 @@
+import math
 import multiprocessing as mp
 import time
 from queue import Empty
@@ -74,18 +75,22 @@ def _live_plot_worker(queue, poll_interval=0.05):
             if fig is None or set(keys) != set(axes.keys()):
                 if fig is not None:
                     plt.close(fig)
+                ncols = 3
+                nrows = math.ceil(len(keys) / ncols)
                 fig, axs = plt.subplots(
-                    len(keys), 1, figsize=(8, 3 * len(keys)), squeeze=False
+                    nrows, ncols, figsize=(4 * ncols, 3 * nrows), squeeze=False
                 )
                 fig.canvas.manager.set_window_title("Live Metrics")
                 axes, lines = {}, {}
-                for ax, k in zip(axs[:, 0], keys):
+                for ax, k in zip(axs.flat, keys):
                     (line,) = ax.plot([], [])
                     ax.set_ylabel(k)
                     ax.set_xlabel("time")
                     ax.grid(True, alpha=0.3)
                     axes[k] = ax
                     lines[k] = line
+                for ax in axs.flat[len(keys):]:
+                    ax.axis("off")
                 fig.tight_layout()
 
             for k, line in lines.items():
@@ -185,13 +190,18 @@ class MetricsLogger:
             return
 
         keys = sorted(self.history.keys())
-        fig, axes = plt.subplots(len(keys), 1, figsize=(8, 3 * len(keys)), squeeze=False)
+        ncols = 3
+        nrows = math.ceil(len(keys) / ncols)
+        fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 3 * nrows), squeeze=False)
 
-        for ax, k in zip(axes[:, 0], keys):
+        for ax, k in zip(axes.flat, keys):
             ax.plot(self.steps, self.history[k])
             ax.set_ylabel(k)
             ax.set_xlabel("iteration")
             ax.grid(True, alpha=0.3)
+
+        for ax in axes.flat[len(keys):]:
+            ax.axis("off")
 
         fig.tight_layout()
         fig.savefig(save_path)
