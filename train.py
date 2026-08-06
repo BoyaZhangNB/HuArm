@@ -11,7 +11,7 @@ NUM_ENVS = 64
 EPISODE_LENGTH = 2000
 STEPS_PER_ITER = 2000
 NUM_ITERS = 10
-FRAME_SKIP = 20 # control freq = 0.002 * 10 = 0.02s per step, 50Hz
+FRAME_SKIP = 20 # control freq = 0.002 * 20 = 0.04s per step, 25Hz
 
 def main():
     # 1. Build the env: task-specific model wrapped with reusable infra.
