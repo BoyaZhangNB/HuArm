@@ -426,7 +426,7 @@ class ErhuEnv(MjxEnv):
     def _reward_contact_penalty(self, k: Dict[str, jax.Array]) -> jax.Array:
         """Penalize the largest contact force in the scene above the soft
         safety threshold `f_safe` (not just force at the bow-mount sensor)."""
-        return -jp.square(jp.maximum(0.0, k["max_contact_force"] - self.f_safe))
+        return jp.maximum(-10, -jp.square(jp.maximum(0.0, k["max_contact_force"] - self.f_safe)))
 
     def _reward_forbidden(self, k: Dict[str, jax.Array]) -> jax.Array:
         """Penalize approaching the forbidden volume. Inert if disabled."""
