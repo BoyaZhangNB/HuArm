@@ -109,8 +109,8 @@ class ErhuEnv(MjxEnv):
         f_max: float = 30.0,
         f_safe: float = 15.0,
         clip_penetration_limit: float = 0.01,
-        string_tolerance: float = 0.2,
-        forbidden_margin: float = 0.02,
+        string_tolerance: float = 0.15,
+        forbidden_margin: float = 0.1,
         contact_duration_scale: float = 20.0,
         velocity_kernel_scale: float = 400.0, # corresopnd to accpetable error of 0.05 [m/s].
         pressure_kernel_scale: float = 1.0, # corresopnd to accpetable error of 1 [N].
@@ -220,11 +220,12 @@ class ErhuEnv(MjxEnv):
         return midpoint
 
     def _sound_box_normal(self, data: mjx.Data) -> jax.Array:
-        # sound_box cylinder axis is local z (see arm.xml); the "top" surface
-        # the bow rests on faces the body's local +z direction.
-        return data.xmat[self._sound_box_id].reshape(3, 3)[:, 2]
+        """Unit normal vector of the sound box's top surface, in world frame. Proxied by the string's normal."""
+        return data.xmat[self._string_a_id].reshape(3, 3)[:, 2]
 
     def _bow_string_contact(self, data: mjx.Data):
+        """Returns (touching, min_dist) for the bow hair vs. either string. Not taking into account for contact margin"""
+        margin = 0.0015
         contact = _get_contact(data)
         g1, g2, dist = contact.geom[:, 0], contact.geom[:, 1], contact.dist
         is_pair = (
@@ -234,7 +235,8 @@ class ErhuEnv(MjxEnv):
             (g2 == self._bow_hair_geom_id)
             & ((g1 == self._string_a_geom_id) | (g1 == self._string_d_geom_id))
         )
-        active = is_pair & (dist < 0)
+        
+        active = is_pair & (dist < margin)
         touching = jp.any(active)
         min_dist = jp.min(jp.where(active, dist, jp.inf))
         return touching, min_dist
@@ -492,8 +494,8 @@ class ErhuEnv(MjxEnv):
             "force_mag": k["force_mag"],
             "max_contact_force": k["max_contact_force"],
             "bow_a_force": k["bow_a_force"],
-            "velocity_error": -terms["velocity"],
-            "pressure_error": -terms["pressure"],
+            "velocity_error": k["lateral_vel"] - k["desired_velocity"],
+            "pressure_error": k["bow_a_force"] - k["desired_pressure"],
             "contact": k["touching"].astype(jp.float32),
             "reward_terms": terms,
         }
