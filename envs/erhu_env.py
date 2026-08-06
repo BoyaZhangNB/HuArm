@@ -101,7 +101,7 @@ class ErhuEnv(MjxEnv):
 
     def __init__(
         self,
-        n_frames: int = 4,
+        n_frames: int = 20,
         n_stack: int = 3,
         enable_forbidden_zone: bool = True,
         max_ctrl_delta: float = 0.05,
@@ -112,6 +112,8 @@ class ErhuEnv(MjxEnv):
         string_tolerance: float = 0.2,
         forbidden_margin: float = 0.02,
         contact_duration_scale: float = 20.0,
+        velocity_kernel_scale: float = 400.0, # corresopnd to accpetable error of 0.05 [m/s].
+        pressure_kernel_scale: float = 1.0, # corresopnd to accpetable error of 1 [N].
         reward_weights: Dict[str, float] = None,
         **kwargs,
     ):
@@ -130,6 +132,8 @@ class ErhuEnv(MjxEnv):
         self.string_tolerance = string_tolerance
         self.forbidden_margin = forbidden_margin
         self.contact_duration_scale = contact_duration_scale
+        self.velocity_kernel_scale = velocity_kernel_scale
+        self.pressure_kernel_scale = pressure_kernel_scale
 
         self.reward_weights = dict(
             velocity=1.0,
@@ -185,12 +189,7 @@ class ErhuEnv(MjxEnv):
         self._ctrl_lo = self.mjx_model.actuator_ctrlrange[:, 0]
         self._ctrl_hi = self.mjx_model.actuator_ctrlrange[:, 1]
 
-        # Erhu-local "left/right" (lateral) bowing axis, expressed in the
-        # erhu_root frame. ASSUMPTION: local x runs along the neck (sound_box
-        # geom uses zaxis="1 0 0", see _sound_box_normal for local z as the
-        # top-surface normal), so local y is the remaining axis -- the one
-        # the bow arm sweeps across during a stroke. Adjust here if that's
-        # not the intended convention.
+        # The erhu's local left/right axis, expressed in the erhu root frame.
         self._lateral_axis_local = jp.array([1.0, 0.0, 0.0])
 
     # ------------------------------------------------------------------
@@ -203,6 +202,7 @@ class ErhuEnv(MjxEnv):
         return rot.T @ (world_pos - origin)
 
     def _bow_geometry(self, data: mjx.Data):
+        """Returns (frog, tip, mid, axis_unit) in world frame."""
         frog = data.site_xpos[self._bow_hair_frog_site]
         tip = data.site_xpos[self._bow_hair_tip_site]
         mid = 0.5 * (frog + tip)
@@ -260,8 +260,7 @@ class ErhuEnv(MjxEnv):
 
     def _bow_hair_a_string_force(self, data: mjx.Data) -> jax.Array:
         """Contact force magnitude between the bow hair and the A-string
-        specifically -- this is the bow-mount pressure the player controls
-        when bowing that string."""
+        specifically"""
         contact = _get_contact(data)
         g1, g2 = contact.geom[:, 0], contact.geom[:, 1]
         is_pair = (
@@ -343,8 +342,10 @@ class ErhuEnv(MjxEnv):
     # contained.
     # ------------------------------------------------------------------
     def _step_kinematics(self, data: mjx.Data, info: Dict[str, Any]) -> Dict[str, jax.Array]:
+        # Sensor force
         force = data.sensordata[self._force_adr:self._force_adr + self._force_dim]
         force_mag = jp.linalg.norm(force)
+        # Both are magnitudes
         max_contact_force = self._max_contact_force(data)
         bow_a_force = self._bow_hair_a_string_force(data)
 
@@ -353,8 +354,9 @@ class ErhuEnv(MjxEnv):
         # Tracking error is computed in the erhu's local frame: rotate the
         # (world-frame, finite-difference) bow velocity into erhu_root and
         # keep only the lateral (left/right) component.
-        erhu_rot = data.xmat[self._erhu_root_id].reshape(3, 3)
-        bow_vel_local = erhu_rot.T @ bow_vel_world
+        erhu_root = data.xmat[self._erhu_root_id].reshape(3, 3)
+        bow_vel_local = erhu_root.T @ bow_vel_world
+        # Bow should move in the normal direction of the cynlider.
         lateral_vel = jp.dot(bow_vel_local, self._lateral_axis_local)
 
         touching, min_dist = self._bow_string_contact(data)
@@ -386,11 +388,13 @@ class ErhuEnv(MjxEnv):
     # ------------------------------------------------------------------
     def _reward_velocity(self, k: Dict[str, jax.Array]) -> jax.Array:
         """Tracking accuracy: lateral bow velocity (erhu-local frame) vs. desired velocity."""
-        return -jp.square(k["lateral_vel"] - k["desired_velocity"])
+        err_sq = jp.square(k["lateral_vel"] - k["desired_velocity"]) * self.velocity_kernel_scale
+        return 1.0 / (1.0 + err_sq)
 
     def _reward_pressure(self, k: Dict[str, jax.Array]) -> jax.Array:
         """Tracking accuracy: bow-hair/A-string contact force vs. desired pressure."""
-        return -jp.square(k["bow_a_force"] - k["desired_pressure"])
+        err_sq = jp.square(k["bow_a_force"] - k["desired_pressure"]) * self.pressure_kernel_scale
+        return 1.0 / (1.0 + err_sq)
 
     def _reward_contact_duration(self, k: Dict[str, jax.Array]) -> jax.Array:
         """Bonus for sustained (not just momentary) hair-string contact."""
@@ -404,10 +408,10 @@ class ErhuEnv(MjxEnv):
     def _reward_bow_flat(self, data: mjx.Data, k: Dict[str, jax.Array]) -> jax.Array:
         """Bow should lie flat: its axis perpendicular to the sound box normal."""
         normal = self._sound_box_normal(data)
-        return -jp.square(jp.dot(k["bow_axis"], normal))
+        return -jp.square(jp.dot(k["bow_axis"], normal)) # both are unit vectors
 
     def _reward_bow_touch_box(self, data: mjx.Data, k: Dict[str, jax.Array]) -> jax.Array:
-        """Bow should ride at the top surface of the sound box."""
+        """Bow should ride at the top surface of (the curve top surface of) the sound box."""
         mid_local = self._relative(k["mid"], self._sound_box_id, data)
         return -jp.square(mid_local[2] - self._sound_box_radius)
 
