@@ -5,10 +5,10 @@
   </option>
 
   <default>
-    <geom density="750" solref="0.002 1" solimp="0.9 0.95 0.001" contype="1" conaffinity="2"/>
+    <geom density="750" solref="0.004 1" solimp="0.9 0.95 0.001" contype="1" conaffinity="2"/>
     <joint damping="0.01"/>
     <default class="string_contact">
-      <geom friction="1.2 0.02 0.001" solref="0.001 1" solimp="0.92 0.97 0.0005" condim="3"/>
+      <geom friction="1.2 0.02 0.001" solref="0.006 1" solimp="0.9 0.95 0.002" condim="3"/>
     </default>
   </default>
 
