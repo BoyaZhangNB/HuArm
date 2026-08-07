@@ -18,7 +18,7 @@ class _PolicyNet(nn.Module):
     def __call__(self, obs):
         x = nn.Dense(self.hidden)(obs)
         x = nn.tanh(x)
-        mean = nn.Dense(self.action_size)(x)
+        mean = nn.tanh(nn.Dense(self.action_size)(x))
         log_std = self.param(
             "log_std", nn.initializers.zeros, (self.action_size,)
         )
@@ -82,14 +82,19 @@ class PPOAgent(Agent):
         gae_lambda: float = 0.95,
         clip_eps: float = 0.2,
         value_coef: float = 0.5,
-        entropy_coef: float = 0.0,
+        entropy_coef: float = 0.01,
         num_epochs: int = 4,
-        num_minibatches: int = 4,
+        num_minibatches: int = 16,
+        max_grad_norm: float = 0.5,
     ):
         self.net = _PolicyNet(action_size=action_size)
         self.obs_size = obs_size
         self.action_size = action_size
-        self.optimizer = optax.adam(lr)
+        self.max_grad_norm = max_grad_norm
+        self.optimizer = optax.chain(
+            optax.clip_by_global_norm(max_grad_norm),
+            optax.adam(lr),
+        )
         self.gamma = gamma
         self.gae_lambda = gae_lambda
         self.clip_eps = clip_eps
@@ -204,10 +209,17 @@ class PPOAgent(Agent):
         )
 
         new_train_state = {"params": params, "opt_state": opt_state, "rng": rng}
+        param_leaves = jax.tree_util.tree_leaves(params)
+        param_norm = optax.global_norm(params)
+        params_isnan = jp.any(
+            jp.array([jp.isnan(leaf).any() for leaf in param_leaves])
+        )
         metrics = {
             "loss": jp.mean(loss),
             "policy_loss": jp.mean(policy_loss),
             "value_loss": jp.mean(value_loss),
             "entropy": jp.mean(entropy),
+            "param_norm": param_norm,
+            "params_isnan": params_isnan,
         }
         return new_train_state, metrics

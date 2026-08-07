@@ -32,7 +32,12 @@ def main():
     def log_fn(it, metrics):
         logger.log(it, metrics)
         eval_reward = metrics.get("eval_reward", float("nan"))
-        print(f"iter {it:3d}  loss={float(metrics['loss']):.4f} eval_reward={float(eval_reward):.4f}")
+        param_norm = float(metrics["param_norm"])
+        params_isnan = bool(metrics["params_isnan"])
+        print(
+            f"iter {it:3d}  loss={float(metrics['loss']):.4f} eval_reward={float(eval_reward):.4f} "
+            f"param_norm={param_norm:.4f} params_isnan={params_isnan}"
+        )
         if "eval_reward" in metrics:
             print_jp_dict(metrics)
 
