@@ -30,6 +30,19 @@ def is_scalar_float(v):
     )
 
 
+def _drop_nan(xs, ys):
+    """Drop (x, y) pairs where y is NaN. Used before plotting metrics that
+    are only logged intermittently (e.g. eval_reward): history/steps store
+    a NaN placeholder for skipped iterations, and matplotlib breaks the line
+    at each NaN, so an isolated real value between two NaNs never gets
+    drawn. Filtering them out first lets the real values connect."""
+    pairs = [(x, y) for x, y in zip(xs, ys) if not math.isnan(y)]
+    if not pairs:
+        return [], []
+    xs_clean, ys_clean = zip(*pairs)
+    return list(xs_clean), list(ys_clean)
+
+
 def flatten_scalar_dict(d, prefix=""):
     """Recursively walk a (possibly nested) dict of metrics and return a
     flat {key: value} dict containing only the zero-dimensional float
@@ -113,7 +126,8 @@ def _live_plot_worker(queue, poll_interval=0.05):
                 fig.tight_layout()
 
             for k, line in lines.items():
-                line.set_data(steps, history[k])
+                xs, ys = _drop_nan(steps, history[k])
+                line.set_data(xs, ys)
                 axes[k].relim()
                 axes[k].autoscale_view()
             fig.tight_layout()
@@ -196,7 +210,8 @@ class MetricsLogger:
         fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 3 * nrows), squeeze=False)
 
         for ax, k in zip(axes.flat, keys):
-            ax.plot(self.steps, self.history[k])
+            xs, ys = _drop_nan(self.steps, self.history[k])
+            ax.plot(xs, ys)
             ax.set_ylabel(k)
             ax.set_xlabel("iteration")
             ax.grid(True, alpha=0.3)
