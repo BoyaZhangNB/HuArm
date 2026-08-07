@@ -18,7 +18,15 @@ class _PolicyNet(nn.Module):
     def __call__(self, obs):
         x = nn.Dense(self.hidden)(obs)
         x = nn.tanh(x)
-        mean = nn.tanh(nn.Dense(self.action_size)(x))
+        # Raw (unbounded) pre-tanh mean -- the actual [-1, 1] squashing
+        # happens at sample time in `act()`/`update()`, together with the
+        # matching log-prob correction below. Squashing this directly
+        # (as a plain `nn.tanh(...)`) was the bug: it saturates and kills
+        # the mean's gradient near +-1 while the log-prob math still
+        # assumed an ordinary unbounded Gaussian, so PPO's cheapest way to
+        # "improve" was to collapse `log_std` instead of moving the mean --
+        # a fast path to a frozen, degenerate policy.
+        mean = nn.Dense(self.action_size)(x)
         log_std = self.param(
             "log_std", nn.initializers.zeros, (self.action_size,)
         )
@@ -26,11 +34,28 @@ class _PolicyNet(nn.Module):
         return mean, log_std, value
 
 
-def _gaussian_log_prob(action, mean, log_std):
+def _atanh(x, eps: float = 1e-6):
+    x = jp.clip(x, -1.0 + eps, 1.0 - eps)
+    return 0.5 * jp.log((1.0 + x) / (1.0 - x))
+
+
+def _squashed_gaussian_log_prob(action, mean, log_std):
+    """log-prob of a tanh-squashed action under a Gaussian with the given
+    (pre-tanh) mean/log_std, i.e. log pi(a) = log N(atanh(a); mean, std) -
+    sum(log(1 - a^2)) -- the tanh-Jacobian correction that a squashed
+    Gaussian policy needs and a plain Gaussian log-prob is missing.
+
+    `action` is the already-squashed action (what's actually stored in a
+    Transition/replay batch); we invert tanh to recover the pre-tanh value
+    the Gaussian density applies to.
+    """
+    pre_tanh = _atanh(action)
     std = jp.exp(log_std)
-    return -0.5 * jp.sum(
-        ((action - mean) / std) ** 2 + 2 * log_std + jp.log(2 * jp.pi), axis=-1
+    log_prob = -0.5 * jp.sum(
+        ((pre_tanh - mean) / std) ** 2 + 2 * log_std + jp.log(2 * jp.pi), axis=-1
     )
+    log_prob -= jp.sum(jp.log(1.0 - jp.square(action) + 1e-6), axis=-1)
+    return log_prob
 
 
 def _compute_gae(
@@ -119,12 +144,13 @@ class PPOAgent(Agent):
     ) -> Tuple[jax.Array, Dict[str, jax.Array]]:
         mean, log_std, value = self.net.apply(train_state["params"], obs)
         if deterministic:
-            action = mean
+            action = jp.tanh(mean)
         else:
             std = jp.exp(log_std)
             noise = jax.random.normal(rng, mean.shape)
-            action = mean + noise * std
-        log_prob = _gaussian_log_prob(action, mean, log_std)
+            pre_tanh = mean + noise * std
+            action = jp.tanh(pre_tanh)
+        log_prob = _squashed_gaussian_log_prob(action, mean, log_std)
         return action, {"log_prob": log_prob, "value": value}
 
     def update(
@@ -170,7 +196,7 @@ class PPOAgent(Agent):
 
         def loss_fn(p, mb_obs, mb_action, mb_old_log_prob, mb_advantages, mb_value_targets):
             mean, log_std, value = self.net.apply(p, mb_obs)
-            log_prob = _gaussian_log_prob(mb_action, mean, log_std)
+            log_prob = _squashed_gaussian_log_prob(mb_action, mean, log_std)
 
             ratio = jp.exp(log_prob - mb_old_log_prob)
             unclipped = ratio * mb_advantages
