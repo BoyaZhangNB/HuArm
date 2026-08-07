@@ -1,6 +1,6 @@
 <mujoco model="erhu">
   <compiler angle="radian" autolimits="true"/>
-  <option timestep="0.002" gravity="0 0 0" integrator="implicitfast">
+  <option timestep="0.002" gravity="0 0 -9.8" integrator="implicitfast">
     <flag contact="enable"/>
   </option>
 

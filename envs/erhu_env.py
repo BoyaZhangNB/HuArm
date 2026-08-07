@@ -77,7 +77,12 @@ def desired_velocity_and_pressure(
     indicating stroke direction (e.g. push vs. pull) relative to the erhu,
     independent of the erhu's world pose.
     """
-    velocity = jp.asarray(0.05)
+    
+    if (data.time // 5) % 5 == 0:
+        velocity = jp.asarray(-0.05)
+    else:
+        velocity = jp.asarray(0.05)
+
     pressure = jp.asarray(2.0)
     return velocity, pressure
 

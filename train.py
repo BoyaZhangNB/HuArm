@@ -7,6 +7,7 @@ import yaml
 
 from training_interface import train
 from agent import PPOAgent
+from sac_agent import SACAgent
 from envs.erhu_env import ErhuEnv
 from utils import MetricsLogger, print_jp_dict, make_env
 
@@ -39,8 +40,11 @@ def main():
     )
 
     # 2. Build any agent satisfying the Agent protocol -- fully decoupled
-    #    from the env/model above.
-    agent = PPOAgent(obs_size=env.observation_size, action_size=env.action_size, **agent_cfg)
+    #    from the env/model above. `algo` selects which one; PPO stays the
+    #    default so existing configs are unaffected.
+    algo = cfg.get("algo", "ppo")
+    agent_cls = {"ppo": PPOAgent, "sac": SACAgent}[algo]
+    agent = agent_cls(obs_size=env.observation_size, action_size=env.action_size, **agent_cfg)
 
     # 3. Train. Swapping `agent` swaps the whole algorithm; swapping the
     #    env class swaps the whole task/robot. Neither affects the other.
