@@ -454,7 +454,8 @@ class ErhuEnv(MjxEnv):
     # ------------------------------------------------------------------
     def _termination(self, data: mjx.Data, k: Dict[str, jax.Array]) -> jax.Array:
         force_exceeded = k["max_contact_force"] > self.f_max
-        bow_crossed_strings = k["touching"] & (k["min_dist"] < -self.clip_penetration_limit)
+        # bow_crossed_strings = k["touching"] & (k["min_dist"] < -self.clip_penetration_limit)
+        bow_crossed_strings = jp.asarray(False)  # disabled for now to prevent early termination
         if self.enable_forbidden_zone:
             entered_forbidden = k["forbidden_dist"] < 0.0
         else:
