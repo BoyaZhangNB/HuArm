@@ -78,10 +78,8 @@ def desired_velocity_and_pressure(
     independent of the erhu's world pose.
     """
     
-    if (data.time // 5) % 5 == 0:
-        velocity = jp.asarray(-0.05)
-    else:
-        velocity = jp.asarray(0.05)
+    is_push = jp.mod(data.time // 5, 5) == 0
+    velocity = jp.where(is_push, -0.05, 0.05)
 
     pressure = jp.asarray(2.0)
     return velocity, pressure
