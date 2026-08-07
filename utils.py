@@ -3,6 +3,8 @@ import multiprocessing as mp
 import time
 from queue import Empty
 
+from envs.wrappers import AutoResetWrapper, EpisodeWrapper, VmapWrapper
+
 import jax.numpy as jp
 import matplotlib
 # Force a non-interactive backend, but only in the main process: mjpython
@@ -213,6 +215,16 @@ class MetricsLogger:
         if self.live_plotter is not None:
             self.live_plotter.close()
 
+
+def make_env(env_class, ep_len, num_envs, **kwargs):
+    """Builds a single environment instance, wrapped with the standard
+    EpisodeWrapper and AutoResetWrapper. kwargs are passed to env_class.
+    """
+    env = env_class(**kwargs)
+    env = EpisodeWrapper(env, episode_length=ep_len)
+    env = AutoResetWrapper(env)
+    env = VmapWrapper(env, num_envs=num_envs)
+    return env
 
 if __name__ == "__main__":
     pass

@@ -13,7 +13,9 @@ MUJOCO_LOG.TXT
 checkpoints/
 Archive.zip
 
+
 # Distribution / packaging
+.claude/
 .Python
 build/
 develop-eggs/

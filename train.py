@@ -1,29 +1,46 @@
+import argparse
+from pathlib import Path
+
 import jax
 import orbax.checkpoint as ocp
-from pathlib import Path
+import yaml
 
 from training_interface import train
 from agent import PPOAgent
-from envs.wrappers import AutoResetWrapper, EpisodeWrapper, VmapWrapper
 from envs.erhu_env import ErhuEnv
-from utils import MetricsLogger, print_jp_dict
+from utils import MetricsLogger, print_jp_dict, make_env
 
-NUM_ENVS = 64
-EPISODE_LENGTH = 2000
-STEPS_PER_ITER = 2000
-NUM_ITERS = 20
-FRAME_SKIP = 20 # control freq = 0.002 * 20 = 0.04s per step, 25Hz
+DEFAULT_CONFIG_PATH = "configs/train.yaml"
+
+
+def load_config(path: str) -> dict:
+    with open(path) as f:
+        return yaml.safe_load(f)
+
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--config", default=DEFAULT_CONFIG_PATH, help="Path to training YAML config."
+    )
+    args = parser.parse_args()
+    cfg = load_config(args.config)
+
+    env_cfg = dict(cfg["env"])
+    num_envs = env_cfg.pop("num_envs")
+    episode_length = env_cfg.pop("episode_length")
+    agent_cfg = cfg["agent"]
+    train_cfg = cfg["train"]
+
     # 1. Build the env: task-specific model wrapped with reusable infra.
-    env = ErhuEnv(n_frames=FRAME_SKIP)
-    env = EpisodeWrapper(env, episode_length=EPISODE_LENGTH)
-    env = AutoResetWrapper(env)
-    env = VmapWrapper(env, num_envs=NUM_ENVS)
+    #    Remaining env_cfg keys are forwarded as ErhuEnv kwargs.
+    env = make_env(
+        ErhuEnv, ep_len=episode_length, num_envs=num_envs, **env_cfg
+    )
 
     # 2. Build any agent satisfying the Agent protocol -- fully decoupled
     #    from the env/model above.
-    agent = PPOAgent(obs_size=env.observation_size, action_size=env.action_size)
+    agent = PPOAgent(obs_size=env.observation_size, action_size=env.action_size, **agent_cfg)
 
     # 3. Train. Swapping `agent` swaps the whole algorithm; swapping the
     #    env class swaps the whole task/robot. Neither affects the other.
@@ -44,22 +61,22 @@ def main():
     train_state = train(
         env=env,
         agent=agent,
-        rng=jax.random.PRNGKey(0),
-        num_iterations=NUM_ITERS,
-        steps_per_iteration=STEPS_PER_ITER,
-        eval_interval=5,
+        rng=jax.random.PRNGKey(cfg["seed"]),
+        num_iterations=train_cfg["num_iterations"],
+        steps_per_iteration=train_cfg["steps_per_iteration"],
+        eval_interval=train_cfg["eval_interval"],
         log_fn=log_fn,
     )
-    logger.plot("metrics.png")
+    logger.plot(train_cfg["metrics_path"])
     logger.close()
     params = train_state["params"]
 
     # Save parameters
     print("Saving model parameters...")
     checkpointer = ocp.StandardCheckpointer()
-    path = Path('checkpoints/model_latest').resolve()
+    path = Path(train_cfg["checkpoint_path"]).resolve()
     checkpointer.save(path, params)
-    checkpointer.wait_until_finished() 
+    checkpointer.wait_until_finished()
 
 
 if __name__ == "__main__":

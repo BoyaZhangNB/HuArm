@@ -84,7 +84,7 @@ class PPOAgent(Agent):
         value_coef: float = 0.5,
         entropy_coef: float = 0.01,
         num_epochs: int = 4,
-        num_minibatches: int = 16,
+        num_minibatches: int = 8,
         max_grad_norm: float = 0.5,
     ):
         self.net = _PolicyNet(action_size=action_size)
