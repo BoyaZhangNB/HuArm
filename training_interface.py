@@ -110,7 +110,10 @@ def rollout(
 def eval(env, agent, train_state, rng, n_episodes, max_steps=2000):
     """Evaluate the agent on a vectorized, autoresetting env until at least
     `n_episodes` episodes have completed (across all parallel envs combined),
-    and return the mean episode return.
+    and return the mean episode return, along with the mean per-episode
+    reward terms (env-specific breakdown from state.metrics["reward_terms"],
+    e.g. velocity/pressure/contact_duration/...), as
+    {"reward": scalar, "reward_terms": {name: scalar, ...}}.
 
     Only episodes that actually finish (done==1) are counted; any episode
     still in progress when `max_steps` is hit is dropped so it can't bias
@@ -121,8 +124,12 @@ def eval(env, agent, train_state, rng, n_episodes, max_steps=2000):
     state = env.reset(reset_rng)
     num_envs = state.done.shape[0]
 
+    zero_terms = jax.tree_util.tree_map(jp.zeros_like, state.metrics["reward_terms"])
+
     ep_return = jp.zeros(num_envs, dtype=jp.float32)
+    ep_reward_terms = zero_terms
     return_sum = jp.zeros((), dtype=jp.float32)
+    reward_terms_sum = jax.tree_util.tree_map(lambda _: jp.zeros((), dtype=jp.float32), zero_terms)
     episode_count = jp.zeros((), dtype=jp.int32)
     step = jp.zeros((), dtype=jp.int32)
 
@@ -131,28 +138,42 @@ def eval(env, agent, train_state, rng, n_episodes, max_steps=2000):
         return jp.logical_and(episode_count < n_episodes, step < max_steps)
 
     def body_fn(carry):
-        state, rng, ep_return, return_sum, episode_count, step = carry
+        (state, rng, ep_return, ep_reward_terms, return_sum, reward_terms_sum,
+         episode_count, step) = carry
 
         rng, act_rng = jax.random.split(rng)
         action, _ = agent.act(train_state, state.obs, act_rng, deterministic=True)
         state = env.step(state, action)
 
         ep_return = ep_return + state.reward
+        ep_reward_terms = jax.tree_util.tree_map(
+            lambda acc, term: acc + term, ep_reward_terms, state.metrics["reward_terms"]
+        )
         done = state.done > 0
 
         return_sum = return_sum + jp.sum(jp.where(done, ep_return, 0.0))
+        reward_terms_sum = jax.tree_util.tree_map(
+            lambda acc, ep_term: acc + jp.sum(jp.where(done, ep_term, 0.0)),
+            reward_terms_sum, ep_reward_terms,
+        )
         episode_count = episode_count + jp.sum(done, dtype=jp.int32)
         ep_return = jp.where(done, 0.0, ep_return)
+        ep_reward_terms = jax.tree_util.tree_map(lambda t: jp.where(done, 0.0, t), ep_reward_terms)
 
-        return state, rng, ep_return, return_sum, episode_count, step + 1
+        return (state, rng, ep_return, ep_reward_terms, return_sum, reward_terms_sum,
+                episode_count, step + 1)
 
-    state, rng, ep_return, return_sum, episode_count, step = jax.lax.while_loop(
+    (state, rng, ep_return, ep_reward_terms, return_sum, reward_terms_sum,
+     episode_count, step) = jax.lax.while_loop(
         cond_fn,
         body_fn,
-        (state, rng, ep_return, return_sum, episode_count, step),
+        (state, rng, ep_return, ep_reward_terms, return_sum, reward_terms_sum,
+         episode_count, step),
     )
 
-    return return_sum / jp.maximum(episode_count, 1)
+    denom = jp.maximum(episode_count, 1)
+    mean_reward_terms = jax.tree_util.tree_map(lambda s: s / denom, reward_terms_sum)
+    return {"reward": return_sum / denom, "reward_terms": mean_reward_terms}
 
 def train(
     env: MjxEnv,
@@ -189,8 +210,10 @@ def train(
             train_state, state, rng, metrics = _train_step(train_state, state, rng)
 
             if it % eval_interval == 0:
-                eval_reward = _eval(train_state, rng)
-                metrics["eval_reward"] = eval_reward
+                eval_metrics = _eval(train_state, rng)
+                metrics["eval_reward"] = eval_metrics["reward"]
+                for name, val in eval_metrics["reward_terms"].items():
+                    metrics[f"eval_reward_terms/{name}"] = val
 
             log_fn(it, metrics)
     except KeyboardInterrupt:

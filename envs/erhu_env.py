@@ -101,17 +101,17 @@ class ErhuEnv(MjxEnv):
 
     def __init__(
         self,
-        n_frames: int = 20,
+        n_frames: int = 20, # timestep 0.002 * 20 = 0.04s per step, 25Hz
         n_stack: int = 3,
         enable_forbidden_zone: bool = True,
         max_ctrl_delta: float = 0.05,
         episode_time_limit: float = 100.0,
         f_max: float = 30.0,
-        f_safe: float = 15.0,
+        f_safe: float = 3.0,
         clip_penetration_limit: float = 0.01,
         string_tolerance: float = 0.15,
         forbidden_margin: float = 0.1,
-        contact_duration_scale: float = 20.0,
+        contact_duration_scale: float = 20.0, # 20 steps (0.8s) give you reward of 0.76, 40 steps give you reward of 0.96, 60 steps give you reward of 0.99.
         velocity_kernel_scale: float = 20.0, # corresopnd to accpetable error of 0.05 [m/s].
         pressure_kernel_scale: float = 1.0, # corresopnd to accpetable error of 1 [N].
         reward_weights: Dict[str, float] = None,

@@ -28,11 +28,28 @@ def is_scalar_float(v):
     )
 
 
-def print_jp_dict(d):
-    """Print only the zero-dimensional float entries of d."""
+def flatten_scalar_dict(d, prefix=""):
+    """Recursively walk a (possibly nested) dict of metrics and return a
+    flat {key: value} dict containing only the zero-dimensional float
+    entries, with nested keys joined by "/" (e.g. eval/reward_terms/velocity).
+    Lets callers log dicts like {"reward_terms": {"velocity": ..., ...}}
+    without every producer having to flatten them itself.
+    """
+    out = {}
     for k, v in d.items():
-        if is_scalar_float(v):
-            print(f"{k}: {float(v):.6f}")
+        key = f"{prefix}{k}"
+        if isinstance(v, dict):
+            out.update(flatten_scalar_dict(v, prefix=f"{key}/"))
+        elif is_scalar_float(v):
+            out[key] = v
+    return out
+
+
+def print_jp_dict(d):
+    """Print only the zero-dimensional float entries of d (nested dicts of
+    scalars, e.g. reward_terms, are flattened first)."""
+    for k, v in flatten_scalar_dict(d).items():
+        print(f"{k}: {float(v):.6f}")
 
 
 def _live_plot_worker(queue, poll_interval=0.05):
@@ -111,13 +128,6 @@ class LiveMetricsPlotter:
     """Streams scalar metrics to a live-updating matplotlib window running
     in a separate subprocess (required under mjpython -- see
     _live_plot_worker). Use alongside or instead of MetricsLogger.plot().
-
-    Usage:
-        live = LiveMetricsPlotter()
-        ...
-        live.log(t, metrics)
-        ...
-        live.close()
     """
 
     def __init__(self):
@@ -132,7 +142,7 @@ class LiveMetricsPlotter:
     def log(self, step, d):
         if self._closed:
             return
-        scalar_items = {k: float(v) for k, v in d.items() if is_scalar_float(v)}
+        scalar_items = {k: float(v) for k, v in flatten_scalar_dict(d).items()}
         if scalar_items:
             self.queue.put((float(step), scalar_items))
 
@@ -152,17 +162,6 @@ class MetricsLogger:
     Pass live=True to also stream updates to a live-updating window (see
     LiveMetricsPlotter) as they're logged, in addition to the final
     plot()/savefig().
-
-    Usage:
-        logger = MetricsLogger(live=True)
-
-        def log_fn(it, metrics):
-            logger.log(it, metrics)
-            print_jp_dict(metrics)
-
-        ...
-        logger.plot("metrics.png")
-        logger.close()
     """
 
     def __init__(self, live=False):
@@ -172,7 +171,7 @@ class MetricsLogger:
 
     def log(self, step, d):
         self.steps.append(step)
-        scalar_items = {k: float(v) for k, v in d.items() if is_scalar_float(v)}
+        scalar_items = {k: float(v) for k, v in flatten_scalar_dict(d).items()}
 
         for k in scalar_items:
             if k not in self.history:

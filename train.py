@@ -6,11 +6,12 @@ from training_interface import train
 from agent import PPOAgent
 from envs.wrappers import AutoResetWrapper, EpisodeWrapper, VmapWrapper
 from envs.erhu_env import ErhuEnv
+from utils import MetricsLogger, print_jp_dict
 
 NUM_ENVS = 64
 EPISODE_LENGTH = 2000
 STEPS_PER_ITER = 2000
-NUM_ITERS = 10
+NUM_ITERS = 20
 FRAME_SKIP = 20 # control freq = 0.002 * 20 = 0.04s per step, 25Hz
 
 def main():
@@ -26,9 +27,14 @@ def main():
 
     # 3. Train. Swapping `agent` swaps the whole algorithm; swapping the
     #    env class swaps the whole task/robot. Neither affects the other.
+    logger = MetricsLogger(live=False)
+
     def log_fn(it, metrics):
+        logger.log(it, metrics)
         eval_reward = metrics.get("eval_reward", float("nan"))
         print(f"iter {it:3d}  loss={float(metrics['loss']):.4f} eval_reward={float(eval_reward):.4f}")
+        if "eval_reward" in metrics:
+            print_jp_dict(metrics)
 
     train_state = train(
         env=env,
@@ -36,9 +42,11 @@ def main():
         rng=jax.random.PRNGKey(0),
         num_iterations=NUM_ITERS,
         steps_per_iteration=STEPS_PER_ITER,
-        eval_interval=3,
+        eval_interval=5,
         log_fn=log_fn,
     )
+    logger.plot("metrics.png")
+    logger.close()
     params = train_state["params"]
 
     # Save parameters
