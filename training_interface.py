@@ -128,8 +128,10 @@ def eval(env, agent, train_state, rng, n_episodes, max_steps=2000):
 
     ep_return = jp.zeros(num_envs, dtype=jp.float32)
     ep_reward_terms = zero_terms
+    ep_len = jp.zeros(num_envs, dtype=jp.int32)
     return_sum = jp.zeros((), dtype=jp.float32)
     reward_terms_sum = jax.tree_util.tree_map(lambda _: jp.zeros((), dtype=jp.float32), zero_terms)
+    length_sum = jp.zeros((), dtype=jp.int32)
     episode_count = jp.zeros((), dtype=jp.int32)
     step = jp.zeros((), dtype=jp.int32)
 
@@ -138,8 +140,8 @@ def eval(env, agent, train_state, rng, n_episodes, max_steps=2000):
         return jp.logical_and(episode_count < n_episodes, step < max_steps)
 
     def body_fn(carry):
-        (state, rng, ep_return, ep_reward_terms, return_sum, reward_terms_sum,
-         episode_count, step) = carry
+        (state, rng, ep_return, ep_reward_terms, ep_len, return_sum, reward_terms_sum,
+         length_sum, episode_count, step) = carry
 
         rng, act_rng = jax.random.split(rng)
         action, _ = agent.act(train_state, state.obs, act_rng, deterministic=True)
@@ -149,6 +151,7 @@ def eval(env, agent, train_state, rng, n_episodes, max_steps=2000):
         ep_reward_terms = jax.tree_util.tree_map(
             lambda acc, term: acc + term, ep_reward_terms, state.metrics["reward_terms"]
         )
+        ep_len = ep_len + 1
         done = state.done > 0
 
         return_sum = return_sum + jp.sum(jp.where(done, ep_return, 0.0))
@@ -156,24 +159,30 @@ def eval(env, agent, train_state, rng, n_episodes, max_steps=2000):
             lambda acc, ep_term: acc + jp.sum(jp.where(done, ep_term, 0.0)),
             reward_terms_sum, ep_reward_terms,
         )
+        length_sum = length_sum + jp.sum(jp.where(done, ep_len, 0), dtype=jp.int32)
         episode_count = episode_count + jp.sum(done, dtype=jp.int32)
         ep_return = jp.where(done, 0.0, ep_return)
         ep_reward_terms = jax.tree_util.tree_map(lambda t: jp.where(done, 0.0, t), ep_reward_terms)
+        ep_len = jp.where(done, 0, ep_len)
 
-        return (state, rng, ep_return, ep_reward_terms, return_sum, reward_terms_sum,
-                episode_count, step + 1)
+        return (state, rng, ep_return, ep_reward_terms, ep_len, return_sum, reward_terms_sum,
+                length_sum, episode_count, step + 1)
 
-    (state, rng, ep_return, ep_reward_terms, return_sum, reward_terms_sum,
-     episode_count, step) = jax.lax.while_loop(
+    (state, rng, ep_return, ep_reward_terms, ep_len, return_sum, reward_terms_sum,
+     length_sum, episode_count, step) = jax.lax.while_loop(
         cond_fn,
         body_fn,
-        (state, rng, ep_return, ep_reward_terms, return_sum, reward_terms_sum,
-         episode_count, step),
+        (state, rng, ep_return, ep_reward_terms, ep_len, return_sum, reward_terms_sum,
+         length_sum, episode_count, step),
     )
 
     denom = jp.maximum(episode_count, 1)
     mean_reward_terms = jax.tree_util.tree_map(lambda s: s / denom, reward_terms_sum)
-    return {"reward": return_sum / denom, "reward_terms": mean_reward_terms}
+    return {
+        "reward": return_sum / denom,
+        "reward_terms": mean_reward_terms,
+        "episode_length": length_sum / denom,
+    }
 
 def train(
     env: MjxEnv,
@@ -212,6 +221,7 @@ def train(
             if it % eval_interval == 0:
                 eval_metrics = _eval(train_state, rng)
                 metrics["eval_reward"] = eval_metrics["reward"]
+                metrics["eval_episode_length"] = eval_metrics["episode_length"]
                 for name, val in eval_metrics["reward_terms"].items():
                     metrics[f"eval_reward_terms/{name}"] = val
 
