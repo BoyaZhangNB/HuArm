@@ -112,13 +112,20 @@ def joint_to_actuator_id(model, joint_name):
     return -1
 
 
-def insert_hair_between_strings(model, data, arm_joint_names=("joint1", "joint2", "joint3", "joint4")):
+def insert_hair_between_strings(model, data, arm_joint_names=("joint1", "joint2", "joint3", "joint4"),
+                                 joint_noise_std=0.0):
     """
     Solves arm IK to place the bow stick midpoint between the erhu strings.
     Since bow_hair is now a rigid body welded to bow_tip (no free joint, no
     equality constraints), positioning bow_link_0 / bow_tip via arm IK is
     sufficient to place the hair as well -- it simply follows the bow's
     kinematic chain, no separate hair layout/pretension step is needed.
+
+    `joint_noise_std` (radians), if > 0, perturbs each arm joint's qpos by
+    independent Gaussian noise after the IK solve converges, then re-runs
+    forward kinematics so the noisy pose is reflected everywhere (and bakes
+    it into ctrl, so the arm starts a little off-target instead of snapping
+    back).
     """
     target = between_strings_target(model, data)
     print(f"Target insertion point (between strings, above sound box): {target}")
@@ -127,6 +134,14 @@ def insert_hair_between_strings(model, data, arm_joint_names=("joint1", "joint2"
     body_points = [("bow_hair", hair_midpoint_local, 1.0)]
     iters, err = jacobian_ik(model, data, body_points, target, list(arm_joint_names))
     print(f"Arm IK converged in {iters} iterations, final position error {err:.6f} m")
+
+    if joint_noise_std > 0:
+        qpos_idxs = [model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn)]
+                     for jn in arm_joint_names]
+        for qidx in qpos_idxs:
+            data.qpos[qidx] += np.random.normal(0.0, joint_noise_std)
+        mujoco.mj_forward(model, data)
+
     set_joint_ctrl(model, data, arm_joint_names)
 
     bow_hair_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "bow_hair")
@@ -136,12 +151,12 @@ def insert_hair_between_strings(model, data, arm_joint_names=("joint1", "joint2"
 
 
 
-def init_huarm(model, data, id_dict=None):
+def init_huarm(model, data, id_dict=None, joint_noise_std=0.0):
     """
     Prepares the model/data for a new episode.
     """
     mujoco.mj_forward(model, data)
-    insert_hair_between_strings(model, data)
+    insert_hair_between_strings(model, data, joint_noise_std=joint_noise_std)
     return model, data
 
 
@@ -219,7 +234,8 @@ def _set_joint_ctrl_jax(mj_model, mjx_data, joint_names):
 
 def init_huarm_jax(mj_model, mjx_model, mjx_data,
                     arm_joint_names=("joint1", "joint2", "joint3", "joint4"),
-                    max_iters=10, damping=1e-2, step_clip=0.1):
+                    max_iters=10, damping=1e-2, step_clip=0.1,
+                    joint_noise_std=0.0, rng=None):
     """
     JAX/MJX counterpart of init_huarm / insert_hair_between_strings: solves
     arm IK to place the bow hair midpoint between the erhu strings, then
@@ -257,5 +273,98 @@ def init_huarm_jax(mj_model, mjx_model, mjx_data,
 
     data = _jacobian_ik_jax(mjx_model, data, body_points, target, dof_idxs, qpos_idxs,
                              max_iters=max_iters, damping=damping, step_clip=step_clip)
+
+    if rng is not None and joint_noise_std > 0:
+        noise = joint_noise_std * jax.random.normal(rng, (len(arm_joint_names),))
+        qpos = data.qpos.at[jnp.asarray(qpos_idxs)].add(noise)
+        data = mjx.forward(mjx_model, data.replace(qpos=qpos))
+
     data = _set_joint_ctrl_jax(mj_model, data, arm_joint_names)
     return data
+
+
+def domain_randomize_jax(mj_model, mjx_model, mjx_data, rng,
+                          arm_joint_names=("joint1", "joint2", "joint3", "joint4"),
+                          friction_range=(0.7, 1.3),
+                          mass_range=(0.8, 1.2),
+                          damping_range=(0.8, 1.2),
+                          erhu_pos_std=0.05,
+                          erhu_tilt_std=0.03,
+                          joint_noise_std=0.005):
+    """
+    Samples per-episode randomized model params -- physical params (contact
+    friction, body mass, joint damping) plus the erhu's placement in the
+    world (erhu_root's body_pos/body_quat, jittered by a small translation
+    and tilt) -- and re-solves init_huarm_jax against them, so the bow's
+    resting pose is consistent with wherever the erhu ended up and however
+    the arm's dynamics were perturbed this episode. The IK solve itself
+    also gets `joint_noise_std` radians of Gaussian noise added to each arm
+    joint afterwards, so the arm doesn't start from the exact same IK
+    solution every episode.
+
+    Meant to be called once per episode from ErhuEnv.reset. Returns
+    (dr_params, mjx_data): `dr_params` is a plain dict of just the ~5
+    randomized array fields (not a full mjx.Model). Stash *that* dict in
+    State.info and merge it onto a closure-captured base mjx_model (e.g.
+    `self.mjx_model.replace(**dr_params)`) right before each mjx call,
+    rather than carrying a whole mjx.Model through info: mjx.Model's ~160
+    static/topology fields get re-hashed (SHA-256, to make them hashable
+    pytree "meta" data) on every `jax.jit` dispatch that traces over it, so
+    threading a full randomized Model through a jitted step() makes every
+    step call pay that cost -- ~30x slower in practice, measured on
+    ErhuEnv.step. Carrying only the handful of actually-randomized arrays
+    keeps the (expensive-to-hash) static fields as a closure constant,
+    flattened once at trace/compile time like before domain randomization
+    existed.
+    """
+    friction_rng, mass_rng, damping_rng, pos_rng, tilt_rng, joint_rng = jax.random.split(rng, 6)
+
+    friction = mjx_model.geom_friction * jax.random.uniform(
+        friction_rng, mjx_model.geom_friction.shape,
+        minval=friction_range[0], maxval=friction_range[1],
+    )
+    body_mass = mjx_model.body_mass * jax.random.uniform(
+        mass_rng, mjx_model.body_mass.shape,
+        minval=mass_range[0], maxval=mass_range[1],
+    )
+    dof_damping = mjx_model.dof_damping * jax.random.uniform(
+        damping_rng, mjx_model.dof_damping.shape,
+        minval=damping_range[0], maxval=damping_range[1],
+    )
+
+    erhu_root_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, "erhu_root")
+    body_pos = mjx_model.body_pos.at[erhu_root_id].add(
+        erhu_pos_std * jax.random.normal(pos_rng, (3,))
+    )
+    # Small-angle random tilt composed onto the nominal orientation, as a
+    # unit quaternion (w, x, y, z); avoids re-normalizing a hand-built axis
+    # so the result stays a valid rotation even for the sampled extremes.
+    tilt_axis_angle = erhu_tilt_std * jax.random.normal(tilt_rng, (3,))
+    tilt_angle = jnp.linalg.norm(tilt_axis_angle) + 1e-8
+    tilt_axis = tilt_axis_angle / tilt_angle
+    tilt_quat = jnp.concatenate([
+        jnp.cos(tilt_angle / 2)[None], tilt_axis * jnp.sin(tilt_angle / 2)
+    ])
+    nominal_quat = mjx_model.body_quat[erhu_root_id]
+    w0, x0, y0, z0 = nominal_quat
+    w1, x1, y1, z1 = tilt_quat
+    body_quat = mjx_model.body_quat.at[erhu_root_id].set(jnp.array([
+        w0 * w1 - x0 * x1 - y0 * y1 - z0 * z1,
+        w0 * x1 + x0 * w1 + y0 * z1 - z0 * y1,
+        w0 * y1 - x0 * z1 + y0 * w1 + z0 * x1,
+        w0 * z1 + x0 * y1 - y0 * x1 + z0 * w1,
+    ]))
+
+    dr_params = dict(
+        geom_friction=friction,
+        body_mass=body_mass,
+        dof_damping=dof_damping,
+        body_pos=body_pos,
+        body_quat=body_quat,
+    )
+    randomized_model = mjx_model.replace(**dr_params)
+
+    mjx_data = init_huarm_jax(mj_model, randomized_model, mjx_data, arm_joint_names,
+                               joint_noise_std=joint_noise_std, rng=joint_rng)
+
+    return dr_params, mjx_data

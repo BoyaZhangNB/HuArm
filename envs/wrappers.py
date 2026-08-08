@@ -100,12 +100,26 @@ class AutoResetWrapper(Wrapper):
     """Automatically resets to a fresh episode when `done` is set, without
     ending the outer jax.lax.scan rollout. This lets a training loop collect
     a fixed-length trajectory of transitions that may span episode
-    boundaries, which is standard practice for JAX-native on-policy RL."""
+    boundaries, which is standard practice for JAX-native on-policy RL.
+
+    Unlike the common brax-style AutoResetWrapper -- which splices back a
+    single "first" state captured once at the outer `reset()` and replays it
+    for every in-rollout auto-reset -- this one calls the wrapped env's real
+    `reset()` again (with a fresh rng split off a key carried in
+    `info["rng"]`) at each auto-reset boundary. That matters for any env
+    whose `reset()` does per-episode domain randomization (e.g. ErhuEnv's
+    `dr_params` -- friction/mass/damping/erhu placement, drawn fresh each
+    `reset()` call): with the replay-the-first-state approach, that
+    randomization would only actually change once per *outer* reset (e.g.
+    once per `num_resets_per_eval` cycle), not once per episode. Calling
+    `reset()` again here re-draws it every episode, matching the "per
+    episode" behavior the randomization is meant to have.
+    """
 
     def reset(self, rng: jax.Array) -> State:
-        state = self.env.reset(rng)
-        state.info["first_pipeline_state"] = state.pipeline_state
-        state.info["first_obs"] = state.obs
+        rng, reset_rng = jax.random.split(rng)
+        state = self.env.reset(reset_rng)
+        state.info["rng"] = rng
         return state
 
     def step(self, state: State, action: jax.Array) -> State:
@@ -117,8 +131,15 @@ class AutoResetWrapper(Wrapper):
         if "steps" in state.info:
             steps = jp.where(state.done, jp.zeros_like(state.info["steps"]), state.info["steps"])
             state.info["steps"] = steps
+        carry_rng = state.info["rng"]
         state = state.replace(done=jp.zeros_like(state.done))
         state = self.env.step(state, action)
+
+        # Fresh reset (including fresh domain randomization) for whichever
+        # envs just finished, rather than replaying a single state captured
+        # once at the outer reset.
+        carry_rng, reset_rng = jax.random.split(carry_rng)
+        reset_state = self.env.reset(reset_rng)
 
         def where_done(x, y):
             done = state.done
@@ -127,10 +148,19 @@ class AutoResetWrapper(Wrapper):
             return jp.where(done, x, y)
 
         pipeline_state = jax.tree_util.tree_map(
-            where_done, state.info["first_pipeline_state"], state.pipeline_state
+            where_done, reset_state.pipeline_state, state.pipeline_state
         )
-        obs = where_done(state.info["first_obs"], state.obs)
-        return state.replace(pipeline_state=pipeline_state, obs=obs)
+        obs = where_done(reset_state.obs, state.obs)
+        # Splice every other per-episode info field (dr_params, action/force
+        # history, contact_steps, ...) the same way, so they stay in sync
+        # with pipeline_state/obs instead of bleeding stale values from the
+        # just-finished episode across the auto-reset boundary.
+        info = dict(state.info)
+        for key, reset_value in reset_state.info.items():
+            info[key] = jax.tree_util.tree_map(where_done, reset_value, state.info[key])
+        info["rng"] = carry_rng
+
+        return state.replace(pipeline_state=pipeline_state, obs=obs, info=info)
 
 
 class VmapWrapper(Wrapper):

@@ -111,12 +111,20 @@ class MjxEnv(abc.ABC):
         data = mjx.forward(self.mjx_model, data)
         return data
 
-    def pipeline_step(self, data: mjx.Data, action: jax.Array) -> mjx.Data:
-        """Apply `action` as ctrl and integrate physics for n_frames steps."""
+    def pipeline_step(
+        self, data: mjx.Data, action: jax.Array, model: Optional[mjx.Model] = None
+    ) -> mjx.Data:
+        """Apply `action` as ctrl and integrate physics for n_frames steps.
+
+        `model` defaults to `self.mjx_model`; pass an explicit model (e.g.
+        one carried per-episode in `State.info` by domain randomization) to
+        step with per-episode-randomized dynamics instead.
+        """
+        model = self.mjx_model if model is None else model
 
         def substep(d, _):
             d = d.replace(ctrl=action)
-            return mjx.step(self.mjx_model, d), None
+            return mjx.step(model, d), None
 
         data, _ = jax.lax.scan(substep, data, None, length=self.n_frames)
         return data

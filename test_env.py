@@ -96,7 +96,6 @@ def main(xml_path):
         print("Teleoperation loop running. Press ESC in viewer to exit.")
         print("Drag the actuator sliders in the viewer's Control panel to command the arm.")
         start = time.time()
-
         try:
             while viewer.is_running():
                 elapsed_real = time.time() - start

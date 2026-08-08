@@ -5,7 +5,7 @@ import mujoco
 from mujoco import mjx
 from mujoco.mjx._src import support as mjx_support
 from .mjx_env import MjxEnv, State
-from .utils_envs import init_huarm, init_huarm_jax
+from .utils_envs import domain_randomize_jax
 
 from typing import Any, Dict, Tuple
 
@@ -118,7 +118,6 @@ class ErhuEnv(MjxEnv):
         **kwargs,
     ):
         super().__init__(xml_path="huarm/arm.xml", n_frames=n_frames, **kwargs)
-        self.mj_model, self.mj_data = init_huarm(self.mj_model, self.mj_data)
         self.mjx_model = mjx.put_model(self.mj_model)
         self.mjx_data = mjx.put_data(self.mj_model, self.mj_data)
 
@@ -193,6 +192,25 @@ class ErhuEnv(MjxEnv):
         self._lateral_axis_local = jp.array([1.0, 0.0, 0.0])
 
     # ------------------------------------------------------------------
+    def _effective_model(self, dr_params: Dict[str, jax.Array]) -> mjx.Model:
+        """Merges this episode's randomized fields onto the closure-captured
+        base `self.mjx_model`.
+
+        `dr_params` (from `domain_randomize_jax`, carried in `info`) holds
+        only the handful of arrays actually randomized per episode --
+        deliberately NOT a full mjx.Model, since threading a whole Model
+        through State/info would make it part of jit's traced input pytree.
+        mjx.Model's ~160 static/topology fields get re-hashed on every such
+        flatten (to make them hashable pytree "meta" data), so a randomized
+        Model riding along in `info` makes every `step()` call under jit
+        pay that cost -- ~30x slower in practice. Keeping `self.mjx_model`
+        as a closure constant and `.replace()`-ing only the randomized
+        fields in here keeps those static fields flattened once, at
+        trace/compile time, exactly as before domain randomization existed.
+        """
+        return self.mjx_model.replace(**dr_params)
+
+    # ------------------------------------------------------------------
     # Geometry helpers (static ids captured by closure, dynamic data args)
     # ------------------------------------------------------------------
     def _relative(self, world_pos: jax.Array, frame_id: int, data: mjx.Data) -> jax.Array:
@@ -241,7 +259,7 @@ class ErhuEnv(MjxEnv):
         min_dist = jp.min(jp.where(active, dist, jp.inf))
         return touching, min_dist
 
-    def _contact_force_mags(self, data: mjx.Data) -> jax.Array:
+    def _contact_force_mags(self, data: mjx.Data, model: mjx.Model) -> jax.Array:
         """Per-contact-slot linear contact force magnitude, shape (ncon,).
 
         Unlike the `bow_arm_contact` force sensor (which only reports force
@@ -249,18 +267,21 @@ class ErhuEnv(MjxEnv):
         constraint force resolved for every active contact in the scene, so
         it reflects the true maximum contact force regardless of where it
         occurs. Inactive contact slots come back as zero force.
+
+        `model` should be this episode's effective (possibly randomized)
+        model -- see `_effective_model` -- not necessarily `self.mjx_model`.
         """
         forces = [
-            mjx_support.contact_force(self.mjx_model, data, i)[:3]
+            mjx_support.contact_force(model, data, i)[:3]
             for i in range(self._ncon)
         ]
         return jp.linalg.norm(jp.stack(forces), axis=-1)
 
-    def _max_contact_force(self, data: mjx.Data) -> jax.Array:
+    def _max_contact_force(self, data: mjx.Data, model: mjx.Model) -> jax.Array:
         """Largest contact force magnitude among ALL active contacts."""
-        return jp.max(self._contact_force_mags(data), initial=0.0)
+        return jp.max(self._contact_force_mags(data, model), initial=0.0)
 
-    def _bow_hair_a_string_force(self, data: mjx.Data) -> jax.Array:
+    def _bow_hair_a_string_force(self, data: mjx.Data, model: mjx.Model) -> jax.Array:
         """Contact force magnitude between the bow hair and the A-string
         specifically"""
         contact = _get_contact(data)
@@ -270,26 +291,31 @@ class ErhuEnv(MjxEnv):
         ) | (
             (g2 == self._bow_hair_geom_id) & (g1 == self._string_a_geom_id)
         )
-        mags = jp.where(is_pair, self._contact_force_mags(data), 0.0)
+        mags = jp.where(is_pair, self._contact_force_mags(data, model), 0.0)
         return jp.max(mags, initial=0.0)
 
     # ------------------------------------------------------------------
     def reset(self, rng: jax.Array) -> State:
         rng, env_rng = jax.random.split(rng, 2)
 
-        # TODO implement domain randomization function
-        # self.mjx_model, in_axes = domain_randomization(self.mjx_model, env_rng)
-
-        data = init_huarm_jax(self.mj_model, self.mjx_model, self.mjx_data)
+        # Samples this episode's randomized model fields (friction/mass/
+        # damping + erhu placement jitter) and re-solves the
+        # bow-hair-between-strings IK against them. `dr_params` (just the
+        # handful of randomized arrays, not a full mjx.Model -- see
+        # `_effective_model`) is carried in `info` for the rest of the
+        # episode so step() keeps using these same randomized dynamics.
+        dr_params, data = domain_randomize_jax(self.mj_model, self.mjx_model, self.mjx_data, env_rng)
+        model = self._effective_model(dr_params)
 
         _, _, mid, _ = self._bow_geometry(data)
         info: Dict[str, Any] = {
+            "dr_params": dr_params,
             "action_history": jp.zeros((self.n_stack, self.action_size)),
             "force_history": jp.zeros((self.n_stack, self._force_dim)),
             "prev_bow_mid": mid,
             "contact_steps": jp.asarray(0.0),
         }
-        obs = self._get_obs(data, info)
+        obs = self._get_obs(data, info, model)
         reward, done = jp.asarray(0.0, dtype=jp.float32), jp.asarray(0.0, dtype=jp.float32)
         # metrics dict must match step()'s structure so wrappers that scan
         # over state (e.g. EpisodeWrapper's action_repeat) see a consistent
@@ -306,7 +332,8 @@ class ErhuEnv(MjxEnv):
         }
         return State(data, obs, reward, done, metrics, info)
 
-    def _get_obs(self, data: mjx.Data, info: Dict[str, Any]) -> jax.Array:
+    def _get_obs(self, data: mjx.Data, info: Dict[str, Any], model: mjx.Model = None) -> jax.Array:
+        model = self.mjx_model if model is None else model
         qpos, qvel = data.qpos, data.qvel
 
         sound_box_rel = self._relative(data.xpos[self._sound_box_id], self._base_id, data)
@@ -324,8 +351,8 @@ class ErhuEnv(MjxEnv):
 
         force = data.sensordata[self._force_adr:self._force_adr + self._force_dim]
 
-        desired_velocity, desired_pressure = desired_velocity_and_pressure(self.mjx_model, data)
-        forbidden_dist = forbidden_area_distance(self.mjx_model, data)
+        desired_velocity, desired_pressure = desired_velocity_and_pressure(model, data)
+        forbidden_dist = forbidden_area_distance(model, data)
 
         obs = jp.concatenate([
             qpos, qvel,
@@ -344,13 +371,13 @@ class ErhuEnv(MjxEnv):
     # once so each reward-category function below stays cheap and self-
     # contained.
     # ------------------------------------------------------------------
-    def _step_kinematics(self, data: mjx.Data, info: Dict[str, Any]) -> Dict[str, jax.Array]:
+    def _step_kinematics(self, data: mjx.Data, info: Dict[str, Any], model: mjx.Model) -> Dict[str, jax.Array]:
         # Sensor force
         force = data.sensordata[self._force_adr:self._force_adr + self._force_dim]
         force_mag = jp.linalg.norm(force)
         # Both are magnitudes
-        max_contact_force = self._max_contact_force(data)
-        bow_a_force = self._bow_hair_a_string_force(data)
+        max_contact_force = self._max_contact_force(data, model)
+        bow_a_force = self._bow_hair_a_string_force(data, model)
 
         frog, tip, mid, bow_axis = self._bow_geometry(data)
         bow_vel_world = (mid - info["prev_bow_mid"]) / self.dt
@@ -365,8 +392,8 @@ class ErhuEnv(MjxEnv):
         touching, min_dist = self._bow_string_contact(data)
         contact_steps = jp.where(touching, info["contact_steps"] + 1.0, 0.0)
 
-        desired_velocity, desired_pressure = desired_velocity_and_pressure(self.mjx_model, data)
-        forbidden_dist = forbidden_area_distance(self.mjx_model, data)
+        desired_velocity, desired_pressure = desired_velocity_and_pressure(model, data)
+        forbidden_dist = forbidden_area_distance(model, data)
 
         return dict(
             force=force,
@@ -469,13 +496,19 @@ class ErhuEnv(MjxEnv):
     def step(self, state: State, action: jax.Array) -> State:
         action = jp.clip(action, -1.0, 1.0)
         prev_data = state.pipeline_state
+        # Per-episode randomized model fields sampled in reset(); carried
+        # unchanged in info so the same randomized dynamics apply all
+        # episode long. Merged onto the closure-captured base model here
+        # rather than carrying a full mjx.Model through info -- see
+        # `_effective_model`.
+        model = self._effective_model(state.info["dr_params"])
         ctrl = jp.clip(
             prev_data.ctrl + action * self.max_ctrl_delta, self._ctrl_lo, self._ctrl_hi
         )
-        data = self.pipeline_step(prev_data, ctrl)
+        data = self.pipeline_step(prev_data, ctrl, model=model)
 
         info: Dict[str, Any] = state.info.copy()
-        k = self._step_kinematics(data, info)
+        k = self._step_kinematics(data, info, model)
 
         terms = self._reward_terms(data, k, action, info)
         reward = sum(self.reward_weights[name] * term for name, term in terms.items())
@@ -492,7 +525,7 @@ class ErhuEnv(MjxEnv):
         info["prev_bow_mid"] = k["mid"]
         info["contact_steps"] = k["contact_steps"]
 
-        obs = self._get_obs(data, info)
+        obs = self._get_obs(data, info, model)
         metrics = {
             "joint_positions": data.qpos,
             "force_mag": k["force_mag"],
