@@ -6,7 +6,7 @@ from mujoco import mjx
 import jax
 import jax.numpy as jp
 from envs.erhu_env import ErhuEnv
-from agent import PPOAgent
+from agents.ppo_agent import PPOAgent
 
 from utils import print_jp_dict, MetricsLogger
 import orbax.checkpoint as ocp

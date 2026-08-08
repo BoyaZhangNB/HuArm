@@ -191,6 +191,7 @@ def train(
     num_iterations: int,
     steps_per_iteration: int,
     eval_interval: int,
+    eval_episodes: int,
     log_fn: Callable[[int, Dict[str, jax.Array]], None] = lambda i, m: None,
 ) -> Any:
     """Generic train loop: rollout -> update -> repeat. Swap `agent` to
@@ -210,7 +211,7 @@ def train(
     _train_step = jax.jit(_train_step)
 
     def _eval_fn(train_state, rng):
-        return eval(env, agent, train_state, rng, n_episodes=30)
+        return eval(env, agent, train_state, rng, n_episodes=eval_episodes)
 
     _eval = jax.jit(_eval_fn)
 

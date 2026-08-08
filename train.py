@@ -6,8 +6,8 @@ import orbax.checkpoint as ocp
 import yaml
 
 from training_interface import train
-from agent import PPOAgent
-from sac_agent import SACAgent
+from agents.ppo_agent import PPOAgent
+from agents.sac_agent import SACAgent
 from envs.erhu_env import ErhuEnv
 from utils import MetricsLogger, print_jp_dict, make_env
 
@@ -69,6 +69,7 @@ def main():
         num_iterations=train_cfg["num_iterations"],
         steps_per_iteration=train_cfg["steps_per_iteration"],
         eval_interval=train_cfg["eval_interval"],
+        eval_episodes=train_cfg["eval_episodes"],
         log_fn=log_fn,
     )
     logger.plot(train_cfg["metrics_path"])
