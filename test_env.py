@@ -71,6 +71,7 @@ def main(xml_path):
 
     env = ErhuEnv(episode_time_limit=1000, max_ctrl_delta=0.05, f_safe=3, f_max=30)
     state = env.reset(jax.random.PRNGKey(0))
+    print(f"Environment reset.")
     model = env.mj_model
     data = mjx.get_data(model, state.pipeline_state)
 

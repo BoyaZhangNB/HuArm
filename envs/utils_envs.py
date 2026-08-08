@@ -4,6 +4,7 @@ from typing import Tuple
 import jax
 import jax.numpy as jnp
 from mujoco import mjx
+from mujoco.mjx._src import support as mjx_support
 import mujoco
 import numpy as np
 
@@ -142,3 +143,119 @@ def init_huarm(model, data, id_dict=None):
     mujoco.mj_forward(model, data)
     insert_hair_between_strings(model, data)
     return model, data
+
+
+# ==================================================
+
+
+# ==================================================
+# JAX / MJX reimplementation of init_huarm.
+#
+# The numpy version above mutates a single CPU mujoco.MjData once, at env
+# construction time. This version is expressed purely with mjx primitives
+# (mjx.forward, mjx_support.jac) so it operates on jax.Array-backed mjx.Data
+# and can be called every episode from ErhuEnv.reset -- including under
+# jit/vmap across a batch of parallel envs. Body/geom/joint ids are still
+# resolved via mujoco.mj_name2id on the plain (CPU) mj_model, which is a
+# static, untraced lookup and therefore safe to do at every call.
+# ==================================================
+
+def _weighted_point_and_jacobian_jax(mjx_model, mjx_data, body_points, dof_idxs):
+    """
+    JAX/MJX counterpart of weighted_point_and_jacobian: weighted-average
+    world position and position Jacobian (3, len(dof_idxs)) for a list of
+    (body_id, local_offset, weight) triples.
+    """
+    dof_idxs = jnp.asarray(dof_idxs)
+    point = jnp.zeros(3)
+    J = jnp.zeros((3, dof_idxs.shape[0]))
+    for bid, local_offset, w in body_points:
+        xmat = mjx_data.xmat[bid].reshape(3, 3)
+        world_pt = mjx_data.xpos[bid] + xmat @ local_offset
+        point = point + w * world_pt
+        jacp, _ = mjx_support.jac(mjx_model, mjx_data, world_pt, bid)
+        J = J + w * jacp[dof_idxs, :].T
+    return point, J
+
+
+def _jacobian_ik_jax(mjx_model, data, body_points, target_pos, dof_idxs, qpos_idxs,
+                      max_iters=10, damping=1e-2, step_clip=0.1):
+    """
+    JAX/MJX counterpart of jacobian_ik. Runs a fixed number of damped
+    least-squares steps via jax.lax.fori_loop (no data-dependent early
+    exit on `tol`, since the iteration count must be static under jit) and
+    returns the resulting mjx.Data with forward kinematics applied.
+    """
+    qpos_idxs = jnp.asarray(qpos_idxs)
+
+    def body_fn(_, data):
+        data = mjx.forward(mjx_model, data)
+        point, J = _weighted_point_and_jacobian_jax(mjx_model, data, body_points, dof_idxs)
+        err = target_pos - point
+        dtheta = J.T @ jnp.linalg.solve(J @ J.T + damping**2 * jnp.eye(3), err)
+        step_norm = jnp.linalg.norm(dtheta)
+        dtheta = dtheta * jnp.minimum(1.0, step_clip / (step_norm + 1e-12))
+        qpos = data.qpos.at[qpos_idxs].add(dtheta)
+        return data.replace(qpos=qpos)
+
+    data = jax.lax.fori_loop(0, max_iters, body_fn, data)
+    return mjx.forward(mjx_model, data)
+
+
+def _set_joint_ctrl_jax(mj_model, mjx_data, joint_names):
+    """
+    JAX/MJX counterpart of set_joint_ctrl: sets actuator controls to match
+    the current qpos for selected joints.
+    """
+    ctrl = mjx_data.ctrl
+    for jn in joint_names:
+        jid = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_JOINT, jn)
+        aid = joint_to_actuator_id(mj_model, jn)
+        if aid >= 0:
+            qadr = mj_model.jnt_qposadr[jid]
+            ctrl = ctrl.at[aid].set(mjx_data.qpos[qadr])
+    return mjx_data.replace(ctrl=ctrl)
+
+
+def init_huarm_jax(mj_model, mjx_model, mjx_data,
+                    arm_joint_names=("joint1", "joint2", "joint3", "joint4"),
+                    max_iters=10, damping=1e-2, step_clip=0.1):
+    """
+    JAX/MJX counterpart of init_huarm / insert_hair_between_strings: solves
+    arm IK to place the bow hair midpoint between the erhu strings, then
+    bakes the result into ctrl so it holds under the position actuators.
+
+    Meant to be called from ErhuEnv.reset (per-episode), not once at env
+    construction time.
+    """
+    data = mjx.forward(mjx_model, mjx_data)
+
+    def bid(name):
+        return mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, name)
+
+    def gid(name):
+        return mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_GEOM, name)
+
+    string_d_id, string_a_id = bid("string_D"), bid("string_A")
+    sound_box_id, sound_box_geom_id = bid("sound_box"), gid("sound_box_geom")
+
+    local_tip = jnp.array([0.0, 0.0, -0.6])
+    d_tip = data.xpos[string_d_id] + data.xmat[string_d_id].reshape(3, 3) @ local_tip
+    a_tip = data.xpos[string_a_id] + data.xmat[string_a_id].reshape(3, 3) @ local_tip
+    target = 0.5 * (d_tip + a_tip)
+    top_z = data.xpos[sound_box_id][2] + mj_model.geom_size[sound_box_geom_id][0]
+    target = target.at[2].set(jnp.maximum(target[2], top_z) + 0.01)
+
+    dof_idxs = [mj_model.jnt_dofadr[mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_JOINT, jn)]
+                for jn in arm_joint_names]
+    qpos_idxs = [mj_model.jnt_qposadr[mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_JOINT, jn)]
+                 for jn in arm_joint_names]
+
+    bow_hair_id = bid("bow_hair")
+    hair_midpoint_local = jnp.array([0.0, 0.0, -0.25])
+    body_points = [(bow_hair_id, hair_midpoint_local, 1.0)]
+
+    data = _jacobian_ik_jax(mjx_model, data, body_points, target, dof_idxs, qpos_idxs,
+                             max_iters=max_iters, damping=damping, step_clip=step_clip)
+    data = _set_joint_ctrl_jax(mj_model, data, arm_joint_names)
+    return data

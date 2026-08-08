@@ -5,7 +5,7 @@ import mujoco
 from mujoco import mjx
 from mujoco.mjx._src import support as mjx_support
 from .mjx_env import MjxEnv, State
-from .utils_envs import init_huarm
+from .utils_envs import init_huarm, init_huarm_jax
 
 from typing import Any, Dict, Tuple
 
@@ -277,9 +277,10 @@ class ErhuEnv(MjxEnv):
     def reset(self, rng: jax.Array) -> State:
         rng, env_rng = jax.random.split(rng, 2)
 
-        data = self.mjx_data
         # TODO implement domain randomization function
         # self.mjx_model, in_axes = domain_randomization(self.mjx_model, env_rng)
+
+        data = init_huarm_jax(self.mj_model, self.mjx_model, self.mjx_data)
 
         _, _, mid, _ = self._bow_geometry(data)
         info: Dict[str, Any] = {
