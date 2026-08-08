@@ -74,7 +74,8 @@ def main():
     )
     logger.plot(train_cfg["metrics_path"])
     logger.close()
-    params = train_state["params"]
+    param_key = {"ppo": 'params', "sac": 'actor_params'}[algo]
+    params = train_state[param_key]
 
     # Save parameters
     print("Saving model parameters...")
