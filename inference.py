@@ -1,57 +1,93 @@
+import sys
+import mujoco
+import mujoco.viewer
+import time
+from mujoco import mjx
 import jax
+import jax.numpy as jp
+from envs.erhu_env import ErhuEnv
+from agent import PPOAgent
+
+from utils import print_jp_dict, MetricsLogger
 import orbax.checkpoint as ocp
 from pathlib import Path
-import mujoco
-import time
 
-from agent import PPOAgent
-from envs.erhu_env import ErhuEnv
 
 path = Path('checkpoints/model_latest').resolve()
 checkpointer = ocp.StandardCheckpointer()
 
-env = ErhuEnv()
-
-agent = PPOAgent(obs_size=env.observation_size, action_size=env.action_size)
-
-FRAME_SKIP = 40
-
-def main():
+    
+def main(xml_path):
     print(f"Using MuJoCo Version: {mujoco.__version__}")
 
+
+    env = ErhuEnv(episode_time_limit=1000)
+
+    agent = PPOAgent(obs_size=env.observation_size, action_size=env.action_size)
+
+    state = env.reset(jax.random.PRNGKey(0))
     model = env.mj_model
-    data = env.mj_data
+    data = mjx.get_data(model, state.pipeline_state)
 
     # Initialize network
     agent_state = agent.init(jax.random.PRNGKey(0))
     restored_params = checkpointer.restore(path, agent_state["params"])
     agent_state = {"params": restored_params, "opt_state": agent_state["opt_state"]}
 
+    log_print_interval = 0.5
+    next_tension_print = 0
+    metrics_logger = MetricsLogger(live=True)
 
-    mujoco.mj_forward(model, data)
-
-    step_count = 0
+    _step = jax.jit(env.step)
+    state = _step(state, jp.zeros(env.action_size))
+    # Fill the same MjData object the viewer was launched with, rather than
+    # rebinding `data` to a new object mujoco.viewer never sees.
+    mjx.get_data_into(data, model, state.pipeline_state)
 
     with mujoco.viewer.launch_passive(model, data) as viewer:
         viewer.sync()
+        print("Teleoperation loop running. Press ESC in viewer to exit.")
+        print("Drag the actuator sliders in the viewer's Control panel to command the arm.")
         start = time.time()
-        while viewer.is_running():
-            elapsed_real = time.time() - start
-            print(f"Sim time {data.time:.3f}, elapsed real time {elapsed_real:.3f}", end="\r")
-            
-            if data.time >= elapsed_real:
-                time.sleep(0.01)
-                continue
 
-            if step_count % FRAME_SKIP == 0:
-                obs = env._get_obs(data, info=None)
-                action, _ = agent.act(agent_state, obs, jax.random.PRNGKey(step_count))
-                data.ctrl[:] = action
-            
-            mujoco.mj_step(model, data)
+        try:
+            while viewer.is_running():
+                elapsed_real = time.time() - start
+                print(f"Sim time {data.time:.3f}, elapsed real time {elapsed_real:.3f}", end="\r")
 
-            step_count += 1
-            viewer.sync()
+                if data.time >= elapsed_real:
+                    time.sleep(0.01)
+                    continue
+                
+                action, _ = agent.act(
+                    agent_state, state.obs, jax.random.PRNGKey(0), deterministic=True
+                )
+                print(f"Action: {action}")
+
+                state = _step(state, action)
+                if state.done:
+                    print(f"\nEpisode terminated")
+                    metrics_logger.plot("metrics.png")
+                    metrics_logger.close()
+                    exit(0)
+                mjx.get_data_into(data, model, state.pipeline_state)
+
+                viewer.sync()
+
+                if data.time >= next_tension_print:
+                    next_tension_print = data.time + log_print_interval
+                    # print_jp_dict(state.metrics)
+                    metrics_logger.log(data.time, state.metrics["reward_terms"])
+
+        except KeyboardInterrupt:
+            print("\nKeyboard interrupt received. Exiting.")
+
+        metrics_logger.plot("metrics.png")
+        metrics_logger.close()
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) != 2:
+        print("Usage: python mujoco_model.py path/to/erhu_model.xml")
+        sys.exit(1)
+
+    main(sys.argv[1])
