@@ -25,9 +25,11 @@ agent:
   tau: 0.005
   batch_size: 256
   buffer_capacity: 500000
-  gradient_steps: 64       # SAC gradient steps per training iteration (update-to-data ratio vs. steps_per_iteration below)
-  min_buffer_size: 2000    # no gradient steps until the replay buffer has at least this many transitions
+  gradient_steps: 32
+  min_buffer_size: 10000
   hidden_dim: 256
+  max_grad_norm: 1.0       # gradient clipping for actor/q1/q2 optimizers (previously unclipped)
+  alpha_max_grad_norm: 1.0 # separate clip for the alpha optimizer (different loss scale)
 
 train:
   num_iterations: 400

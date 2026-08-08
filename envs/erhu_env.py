@@ -77,10 +77,7 @@ def desired_velocity_and_pressure(
     indicating stroke direction (e.g. push vs. pull) relative to the erhu,
     independent of the erhu's world pose.
     """
-    
-    is_push = jp.mod(data.time // 5, 5) == 0
-    velocity = jp.where(is_push, -0.05, 0.05)
-
+    velocity = jp.sin(2 * jp.pi * data.time / 5) * 0.05  # oscillate between -0.05 and 0.05 m/s
     pressure = jp.asarray(2.0)
     return velocity, pressure
 
@@ -109,7 +106,7 @@ class ErhuEnv(MjxEnv):
         enable_forbidden_zone: bool = True,
         max_ctrl_delta: float = 0.05,
         episode_time_limit: float = 100.0,
-        f_max: float = 30.0,
+        f_max: float = 10.0,
         f_safe: float = 3.0,
         clip_penetration_limit: float = 0.01,
         string_tolerance: float = 0.15,
@@ -418,18 +415,20 @@ class ErhuEnv(MjxEnv):
     def _reward_bow_touch_box(self, data: mjx.Data, k: Dict[str, jax.Array]) -> jax.Array:
         """Bow should ride at the top surface of (the curve top surface of) the sound box."""
         mid_local = self._relative(k["mid"], self._sound_box_id, data)
-        return -jp.square(mid_local[2] - self._sound_box_radius)
+        return jp.maximum(-1.0, -jp.square(mid_local[2] - self._sound_box_radius))
 
     def _reward_string_center(self, data: mjx.Data, k: Dict[str, jax.Array]) -> jax.Array:
         """Bow center should stay within `string_tolerance` of the between-strings target."""
         target = self._between_strings_target(data)
         string_dist = jp.linalg.norm(k["mid"] - target)
-        return -jp.square(jp.maximum(0.0, string_dist - self.string_tolerance))
+        return jp.maximum(
+            -1.0, -jp.square(jp.maximum(0.0, string_dist - self.string_tolerance))
+        )
 
     def _reward_contact_penalty(self, k: Dict[str, jax.Array]) -> jax.Array:
         """Penalize the largest contact force in the scene above the soft
         safety threshold `f_safe` (not just force at the bow-mount sensor)."""
-        return jp.maximum(-10, -jp.square(jp.maximum(0.0, k["max_contact_force"] - self.f_safe)))
+        return jp.maximum(-1, -jp.square(jp.maximum(0.0, k["max_contact_force"] - self.f_safe)))
 
     def _reward_forbidden(self, k: Dict[str, jax.Array]) -> jax.Array:
         """Penalize approaching the forbidden volume. Inert if disabled."""

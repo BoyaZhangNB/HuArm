@@ -48,7 +48,11 @@ class _ActorNet(nn.Module):
         x = nn.relu(x)
         mean = nn.Dense(self.action_size)(x)
         log_std = nn.Dense(self.action_size)(x)
-        log_std = jp.clip(log_std, -20.0, 2.0)
+        # Floor raised from -20 to -5: -20 permits a near-deterministic
+        # policy (std ~ exp(-20)) whose log-probs blow up to pathological
+        # magnitudes, which is what was driving the alpha/actor/critic
+        # divergence (see agents/sac_agent.py module docstring investigation).
+        log_std = jp.clip(log_std, -5.0, 2.0)
         return mean, log_std
 
 
@@ -107,6 +111,10 @@ class SACAgent(Agent):
         min_buffer_size: int = 2_000,
         hidden_dim: int = 256,
         target_entropy: float = None,
+        max_grad_norm: float = 1.0,
+        alpha_max_grad_norm: float = 1.0,
+        log_alpha_min: float = -10.0,
+        log_alpha_max: float = 2.0,
     ):
         self.obs_size = obs_size
         self.action_size = action_size
@@ -122,11 +130,29 @@ class SACAgent(Agent):
         self.target_entropy = (
             -float(action_size) if target_entropy is None else target_entropy
         )
+        # Hard backstop on the entropy temperature: independent of gradient
+        # clipping, this caps how large `alpha = exp(log_alpha)` can ever
+        # get, which is what was letting alpha (and, downstream, actor/critic
+        # loss) run away unboundedly once log_prob diverged from target_entropy.
+        self.log_alpha_min = log_alpha_min
+        self.log_alpha_max = log_alpha_max
 
-        self.actor_optimizer = optax.adam(actor_lr)
-        self.q1_optimizer = optax.adam(critic_lr)
-        self.q2_optimizer = optax.adam(critic_lr)
-        self.alpha_optimizer = optax.adam(alpha_lr)
+        # All four optimizers previously had no gradient clipping at all
+        # (unlike PPOAgent's clip_by_global_norm, see agents/ppo_agent.py) --
+        # a handful of outlier samples could otherwise produce unbounded
+        # gradient norms with nothing to arrest them.
+        self.actor_optimizer = optax.chain(
+            optax.clip_by_global_norm(max_grad_norm), optax.adam(actor_lr)
+        )
+        self.q1_optimizer = optax.chain(
+            optax.clip_by_global_norm(max_grad_norm), optax.adam(critic_lr)
+        )
+        self.q2_optimizer = optax.chain(
+            optax.clip_by_global_norm(max_grad_norm), optax.adam(critic_lr)
+        )
+        self.alpha_optimizer = optax.chain(
+            optax.clip_by_global_norm(alpha_max_grad_norm), optax.adam(alpha_lr)
+        )
 
     def init(self, rng: jax.Array) -> Any:
         rng, actor_rng, q1_rng, q2_rng = jax.random.split(rng, 4)
@@ -306,6 +332,7 @@ class SACAgent(Agent):
                 alpha_grads, alpha_opt_state, log_alpha
             )
             log_alpha = optax.apply_updates(log_alpha, alpha_updates)
+            log_alpha = jp.clip(log_alpha, self.log_alpha_min, self.log_alpha_max)
 
             # --- Polyak-average target critics ---
             q1_target = jax.tree_util.tree_map(
