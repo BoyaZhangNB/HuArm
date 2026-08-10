@@ -161,163 +161,49 @@ def init_huarm(model, data, id_dict=None, joint_noise_std=0.0):
 
 
 # ==================================================
-
-
-# ==================================================
-# JAX / MJX reimplementation of init_huarm.
-#
-# The numpy version above mutates a single CPU mujoco.MjData once, at env
-# construction time. This version is expressed purely with mjx primitives
-# (mjx.forward, mjx_support.jac) so it operates on jax.Array-backed mjx.Data
-# and can be called every episode from ErhuEnv.reset -- including under
-# jit/vmap across a batch of parallel envs. Body/geom/joint ids are still
-# resolved via mujoco.mj_name2id on the plain (CPU) mj_model, which is a
-# static, untraced lookup and therefore safe to do at every call.
-# ==================================================
-
-def _weighted_point_and_jacobian_jax(mjx_model, mjx_data, body_points, dof_idxs):
+def arm_joint_indices(mj_model, arm_joint_names=("joint1", "joint2", "joint3", "joint4")):
     """
-    JAX/MJX counterpart of weighted_point_and_jacobian: weighted-average
-    world position and position Jacobian (3, len(dof_idxs)) for a list of
-    (body_id, local_offset, weight) triples.
+    Precomputes, once per model (e.g. at env init), the static index arrays
+    needed by `domain_randomize_jax` / `_set_joint_ctrl_jax` each reset --
+    qpos addresses for all arm joints, plus the (actuator id, qpos address)
+    pairs for the subset of those joints that are actuated. Passing these in
+    as args avoids repeating `mj_name2id`/`joint_to_actuator_id` python
+    lookups on every call.
     """
-    dof_idxs = jnp.asarray(dof_idxs)
-    point = jnp.zeros(3)
-    J = jnp.zeros((3, dof_idxs.shape[0]))
-    for bid, local_offset, w in body_points:
-        xmat = mjx_data.xmat[bid].reshape(3, 3)
-        world_pt = mjx_data.xpos[bid] + xmat @ local_offset
-        point = point + w * world_pt
-        jacp, _ = mjx_support.jac(mjx_model, mjx_data, world_pt, bid)
-        J = J + w * jacp[dof_idxs, :].T
-    return point, J
+    jids = [mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_JOINT, jn) for jn in arm_joint_names]
+    qpos_idxs = jnp.asarray([mj_model.jnt_qposadr[jid] for jid in jids])
+
+    aids = [joint_to_actuator_id(mj_model, jn) for jn in arm_joint_names]
+    ctrl_aids = jnp.asarray([a for a in aids if a >= 0], dtype=jnp.int32)
+    ctrl_qpos_idxs = jnp.asarray(
+        [mj_model.jnt_qposadr[jid] for jid, a in zip(jids, aids) if a >= 0]
+    )
+    return qpos_idxs, ctrl_aids, ctrl_qpos_idxs
 
 
-def _jacobian_ik_jax(mjx_model, data, body_points, target_pos, dof_idxs, qpos_idxs,
-                      max_iters=10, damping=1e-2, step_clip=0.1):
-    """
-    JAX/MJX counterpart of jacobian_ik. Runs a fixed number of damped
-    least-squares steps via jax.lax.fori_loop (no data-dependent early
-    exit on `tol`, since the iteration count must be static under jit) and
-    returns the resulting mjx.Data with forward kinematics applied.
-    """
-    qpos_idxs = jnp.asarray(qpos_idxs)
-
-    def body_fn(_, data):
-        data = mjx.forward(mjx_model, data)
-        point, J = _weighted_point_and_jacobian_jax(mjx_model, data, body_points, dof_idxs)
-        err = target_pos - point
-        dtheta = J.T @ jnp.linalg.solve(J @ J.T + damping**2 * jnp.eye(3), err)
-        step_norm = jnp.linalg.norm(dtheta)
-        dtheta = dtheta * jnp.minimum(1.0, step_clip / (step_norm + 1e-12))
-        qpos = data.qpos.at[qpos_idxs].add(dtheta)
-        return data.replace(qpos=qpos)
-
-    data = jax.lax.fori_loop(0, max_iters, body_fn, data)
-    return mjx.forward(mjx_model, data)
-
-
-def _set_joint_ctrl_jax(mj_model, mjx_data, joint_names):
+def _set_joint_ctrl_jax(mjx_data, ctrl_aids, ctrl_qpos_idxs):
     """
     JAX/MJX counterpart of set_joint_ctrl: sets actuator controls to match
-    the current qpos for selected joints.
+    the current qpos for selected joints, given their precomputed
+    (actuator id, qpos address) index arrays (see `arm_joint_indices`).
     """
-    ctrl = mjx_data.ctrl
-    for jn in joint_names:
-        jid = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_JOINT, jn)
-        aid = joint_to_actuator_id(mj_model, jn)
-        if aid >= 0:
-            qadr = mj_model.jnt_qposadr[jid]
-            ctrl = ctrl.at[aid].set(mjx_data.qpos[qadr])
+    ctrl = mjx_data.ctrl.at[ctrl_aids].set(mjx_data.qpos[ctrl_qpos_idxs])
     return mjx_data.replace(ctrl=ctrl)
 
-
-def init_huarm_jax(mj_model, mjx_model, mjx_data,
-                    arm_joint_names=("joint1", "joint2", "joint3", "joint4"),
-                    max_iters=10, damping=1e-2, step_clip=0.1,
-                    joint_noise_std=0.0, rng=None):
-    """
-    JAX/MJX counterpart of init_huarm / insert_hair_between_strings: solves
-    arm IK to place the bow hair midpoint between the erhu strings, then
-    bakes the result into ctrl so it holds under the position actuators.
-
-    Meant to be called from ErhuEnv.reset (per-episode), not once at env
-    construction time.
-    """
-    data = mjx.forward(mjx_model, mjx_data)
-
-    def bid(name):
-        return mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, name)
-
-    def gid(name):
-        return mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_GEOM, name)
-
-    string_d_id, string_a_id = bid("string_D"), bid("string_A")
-    sound_box_id, sound_box_geom_id = bid("sound_box"), gid("sound_box_geom")
-
-    local_tip = jnp.array([0.0, 0.0, -0.6])
-    d_tip = data.xpos[string_d_id] + data.xmat[string_d_id].reshape(3, 3) @ local_tip
-    a_tip = data.xpos[string_a_id] + data.xmat[string_a_id].reshape(3, 3) @ local_tip
-    target = 0.5 * (d_tip + a_tip)
-    top_z = data.xpos[sound_box_id][2] + mj_model.geom_size[sound_box_geom_id][0]
-    target = target.at[2].set(jnp.maximum(target[2], top_z) + 0.01)
-
-    dof_idxs = [mj_model.jnt_dofadr[mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_JOINT, jn)]
-                for jn in arm_joint_names]
-    qpos_idxs = [mj_model.jnt_qposadr[mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_JOINT, jn)]
-                 for jn in arm_joint_names]
-
-    bow_hair_id = bid("bow_hair")
-    hair_midpoint_local = jnp.array([0.0, 0.0, -0.25])
-    body_points = [(bow_hair_id, hair_midpoint_local, 1.0)]
-
-    data = _jacobian_ik_jax(mjx_model, data, body_points, target, dof_idxs, qpos_idxs,
-                             max_iters=max_iters, damping=damping, step_clip=step_clip)
-
-    if rng is not None and joint_noise_std > 0:
-        noise = joint_noise_std * jax.random.normal(rng, (len(arm_joint_names),))
-        qpos = data.qpos.at[jnp.asarray(qpos_idxs)].add(noise)
-        data = mjx.forward(mjx_model, data.replace(qpos=qpos))
-
-    data = _set_joint_ctrl_jax(mj_model, data, arm_joint_names)
-    return data
-
-
-def domain_randomize_jax(mj_model, mjx_model, mjx_data, rng,
-                          arm_joint_names=("joint1", "joint2", "joint3", "joint4"),
+def domain_randomize_jax(mjx_model, mjx_data, rng, erhu_pose_pool,
+                          arm_qpos_idxs, arm_ctrl_aids, arm_ctrl_qpos_idxs,
                           friction_range=(0.7, 1.3),
                           mass_range=(0.8, 1.2),
                           damping_range=(0.8, 1.2),
-                          erhu_pos_std=0.05,
-                          erhu_tilt_std=0.03,
                           joint_noise_std=0.005):
-    """
-    Samples per-episode randomized model params -- physical params (contact
-    friction, body mass, joint damping) plus the erhu's placement in the
-    world (erhu_root's body_pos/body_quat, jittered by a small translation
-    and tilt) -- and re-solves init_huarm_jax against them, so the bow's
-    resting pose is consistent with wherever the erhu ended up and however
-    the arm's dynamics were perturbed this episode. The IK solve itself
-    also gets `joint_noise_std` radians of Gaussian noise added to each arm
-    joint afterwards, so the arm doesn't start from the exact same IK
-    solution every episode.
+    """Samples this episode's randomized dynamics params -- contact friction,
+    body mass, joint damping.
 
-    Meant to be called once per episode from ErhuEnv.reset. Returns
-    (dr_params, mjx_data): `dr_params` is a plain dict of just the ~5
-    randomized array fields (not a full mjx.Model). Stash *that* dict in
-    State.info and merge it onto a closure-captured base mjx_model (e.g.
-    `self.mjx_model.replace(**dr_params)`) right before each mjx call,
-    rather than carrying a whole mjx.Model through info: mjx.Model's ~160
-    static/topology fields get re-hashed (SHA-256, to make them hashable
-    pytree "meta" data) on every `jax.jit` dispatch that traces over it, so
-    threading a full randomized Model through a jitted step() makes every
-    step call pay that cost -- ~30x slower in practice, measured on
-    ErhuEnv.step. Carrying only the handful of actually-randomized arrays
-    keeps the (expensive-to-hash) static fields as a closure constant,
-    flattened once at trace/compile time like before domain randomization
-    existed.
-    """
-    friction_rng, mass_rng, damping_rng, pos_rng, tilt_rng, joint_rng = jax.random.split(rng, 6)
+    `arm_qpos_idxs`, `arm_ctrl_aids`, `arm_ctrl_qpos_idxs` are the static
+    index arrays from `arm_joint_indices(mj_model, arm_joint_names)`,
+    precomputed once at env init and passed in here to avoid recomputing
+    them (and the underlying mj_name2id lookups) on every reset."""
+    friction_rng, mass_rng, damping_rng, pool_rng, joint_rng = jax.random.split(rng, 5)
 
     friction = mjx_model.geom_friction * jax.random.uniform(
         friction_rng, mjx_model.geom_friction.shape,
@@ -332,28 +218,8 @@ def domain_randomize_jax(mj_model, mjx_model, mjx_data, rng,
         minval=damping_range[0], maxval=damping_range[1],
     )
 
-    erhu_root_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, "erhu_root")
-    body_pos = mjx_model.body_pos.at[erhu_root_id].add(
-        erhu_pos_std * jax.random.normal(pos_rng, (3,))
-    )
-    # Small-angle random tilt composed onto the nominal orientation, as a
-    # unit quaternion (w, x, y, z); avoids re-normalizing a hand-built axis
-    # so the result stays a valid rotation even for the sampled extremes.
-    tilt_axis_angle = erhu_tilt_std * jax.random.normal(tilt_rng, (3,))
-    tilt_angle = jnp.linalg.norm(tilt_axis_angle) + 1e-8
-    tilt_axis = tilt_axis_angle / tilt_angle
-    tilt_quat = jnp.concatenate([
-        jnp.cos(tilt_angle / 2)[None], tilt_axis * jnp.sin(tilt_angle / 2)
-    ])
-    nominal_quat = mjx_model.body_quat[erhu_root_id]
-    w0, x0, y0, z0 = nominal_quat
-    w1, x1, y1, z1 = tilt_quat
-    body_quat = mjx_model.body_quat.at[erhu_root_id].set(jnp.array([
-        w0 * w1 - x0 * x1 - y0 * y1 - z0 * z1,
-        w0 * x1 + x0 * w1 + y0 * z1 - z0 * y1,
-        w0 * y1 - x0 * z1 + y0 * w1 + z0 * x1,
-        w0 * z1 + x0 * y1 - y0 * x1 + z0 * w1,
-    ]))
+    pose = sample_erhu_pose_pool(erhu_pose_pool, pool_rng)
+    body_pos, body_quat, arm_qpos = pose["body_pos"], pose["body_quat"], pose["arm_qpos"]
 
     dr_params = dict(
         geom_friction=friction,
@@ -364,7 +230,99 @@ def domain_randomize_jax(mj_model, mjx_model, mjx_data, rng,
     )
     randomized_model = mjx_model.replace(**dr_params)
 
-    mjx_data = init_huarm_jax(mj_model, randomized_model, mjx_data, arm_joint_names,
-                               joint_noise_std=joint_noise_std, rng=joint_rng)
+    if joint_noise_std > 0:
+        arm_qpos = arm_qpos + joint_noise_std * jax.random.normal(joint_rng, arm_qpos.shape)
+
+    mjx_data = mjx_data.replace(qpos=mjx_data.qpos.at[arm_qpos_idxs].set(arm_qpos))
+    mjx_data = mjx.forward(randomized_model, mjx_data)
+    mjx_data = _set_joint_ctrl_jax(mjx_data, arm_ctrl_aids, arm_ctrl_qpos_idxs)
 
     return dr_params, mjx_data
+
+# ==================================================
+
+def build_erhu_pose_pool(mj_model, mjx_model, rng, pool_size,
+                          arm_joint_names=("joint1", "joint2", "joint3", "joint4"),
+                          erhu_pos_std=0.05, erhu_tilt_std=0.03):
+    """
+    Precomputes `pool_size` random erhu placements (erhu_root's body_pos/
+    body_quat, jittered by a small translation and tilt) and the arm's
+    Jacobian-IK solution for each
+    
+    Returns a dict pytree {"body_pos", "body_quat", "arm_qpos"}, each
+    array stacked with a leading `pool_size` axis, for
+    `sample_erhu_pose_pool` to draw from inside reset().
+    """
+    erhu_root_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, "erhu_root")
+    qpos_idxs = [mj_model.jnt_qposadr[mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_JOINT, jn)]
+                 for jn in arm_joint_names]
+
+    # mj_model.body_pos/body_quat are mutated in place per sample (mujoco
+    # has no cheap immutable "with field set" for MjModel) and restored
+    # afterwards, so the shared mj_model object comes out exactly as it
+    # went in regardless of how this loop exits.
+    base_body_pos = np.array(mjx_model.body_pos)   # (nbody, 3), full-model template
+    base_body_quat = np.array(mjx_model.body_quat)  # (nbody, 4)
+    nominal_pos = base_body_pos[erhu_root_id].copy()
+    nominal_quat = base_body_quat[erhu_root_id].copy()
+    hair_midpoint_local = np.array([0.0, 0.0, -0.25])
+    body_points = [("bow_hair", hair_midpoint_local, 1.0)]
+
+    body_pos_pool, body_quat_pool, arm_qpos_pool = [], [], []
+    try:
+        for i in range(pool_size):
+            print(f"Building erhu pose pool: sample {i+1}/{pool_size}", end="\r")
+            rng, pos_rng, tilt_rng = jax.random.split(rng, 3)
+
+            body_pos = nominal_pos + erhu_pos_std * np.asarray(jax.random.normal(pos_rng, (3,)))
+            # Small-angle random tilt composed onto the nominal orientation,
+            # as a unit quaternion (w, x, y, z); avoids re-normalizing a
+            # hand-built axis so the result stays a valid rotation even at
+            # sampled extremes.
+            tilt_axis_angle = erhu_tilt_std * np.asarray(jax.random.normal(tilt_rng, (3,)))
+            tilt_angle = float(np.linalg.norm(tilt_axis_angle)) + 1e-8
+            tilt_axis = tilt_axis_angle / tilt_angle
+            tilt_quat = np.concatenate([[np.cos(tilt_angle / 2)], tilt_axis * np.sin(tilt_angle / 2)])
+            w0, x0, y0, z0 = nominal_quat
+            w1, x1, y1, z1 = tilt_quat
+            body_quat = np.array([
+                w0 * w1 - x0 * x1 - y0 * y1 - z0 * z1,
+                w0 * x1 + x0 * w1 + y0 * z1 - z0 * y1,
+                w0 * y1 - x0 * z1 + y0 * w1 + z0 * x1,
+                w0 * z1 + x0 * y1 - y0 * x1 + z0 * w1,
+            ])
+
+            mj_model.body_pos[erhu_root_id] = body_pos
+            mj_model.body_quat[erhu_root_id] = body_quat
+
+            data = mujoco.MjData(mj_model)
+            mujoco.mj_forward(mj_model, data)
+            target = between_strings_target(mj_model, data)
+            jacobian_ik(mj_model, data, body_points, target, list(arm_joint_names))
+
+            body_pos_full = base_body_pos.copy()
+            body_pos_full[erhu_root_id] = body_pos
+            body_quat_full = base_body_quat.copy()
+            body_quat_full[erhu_root_id] = body_quat
+
+            body_pos_pool.append(body_pos_full)
+            body_quat_pool.append(body_quat_full)
+            arm_qpos_pool.append(np.array([data.qpos[qi] for qi in qpos_idxs]))
+    finally:
+        mj_model.body_pos[erhu_root_id] = nominal_pos
+        mj_model.body_quat[erhu_root_id] = nominal_quat
+
+    return dict(
+        body_pos=jnp.asarray(np.stack(body_pos_pool)),
+        body_quat=jnp.stack(body_quat_pool),
+        arm_qpos=jnp.stack(arm_qpos_pool),
+    )
+
+
+def sample_erhu_pose_pool(pool, rng):
+    """Draws one (body_pos, body_quat, arm_qpos) triple from a pool built by
+    `build_erhu_pose_pool`: a random index plus a gather on each leaf --
+    cheap enough to call every reset(), unlike the IK solve it replaces."""
+    pool_size = pool["body_pos"].shape[0]
+    idx = jax.random.randint(rng, (), 0, pool_size)
+    return jax.tree_util.tree_map(lambda x: x[idx], pool)

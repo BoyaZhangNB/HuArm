@@ -5,7 +5,7 @@ import mujoco
 from mujoco import mjx
 from mujoco.mjx._src import support as mjx_support
 from .mjx_env import MjxEnv, State
-from .utils_envs import domain_randomize_jax
+from .utils_envs import build_erhu_pose_pool, domain_randomize_jax, arm_joint_indices
 
 from typing import Any, Dict, Tuple
 
@@ -115,11 +115,25 @@ class ErhuEnv(MjxEnv):
         velocity_kernel_scale: float = 20.0, # corresopnd to accpetable error of 0.05 [m/s].
         pressure_kernel_scale: float = 1.0, # corresopnd to accpetable error of 1 [N].
         reward_weights: Dict[str, float] = None,
+        dr_pool_size: int = 1024,
+        dr_pool_seed: int = 0,
         **kwargs,
     ):
         super().__init__(xml_path="huarm/arm.xml", n_frames=n_frames, **kwargs)
         self.mjx_model = mjx.put_model(self.mj_model)
         self.mjx_data = mjx.put_data(self.mj_model, self.mj_data)
+
+        self._erhu_pose_pool = build_erhu_pose_pool(
+            self.mj_model, self.mjx_model,
+            jax.random.PRNGKey(dr_pool_seed), dr_pool_size,
+        )
+
+        # Static arm-joint index arrays for domain_randomize_jax /
+        # _set_joint_ctrl_jax, computed once here instead of on every
+        # reset() to cut python-side mj_name2id lookups off the hot path.
+        (self._arm_qpos_idxs,
+         self._arm_ctrl_aids,
+         self._arm_ctrl_qpos_idxs) = arm_joint_indices(self.mj_model)
 
         self.n_stack = n_stack
         self.enable_forbidden_zone = enable_forbidden_zone
@@ -194,20 +208,7 @@ class ErhuEnv(MjxEnv):
     # ------------------------------------------------------------------
     def _effective_model(self, dr_params: Dict[str, jax.Array]) -> mjx.Model:
         """Merges this episode's randomized fields onto the closure-captured
-        base `self.mjx_model`.
-
-        `dr_params` (from `domain_randomize_jax`, carried in `info`) holds
-        only the handful of arrays actually randomized per episode --
-        deliberately NOT a full mjx.Model, since threading a whole Model
-        through State/info would make it part of jit's traced input pytree.
-        mjx.Model's ~160 static/topology fields get re-hashed on every such
-        flatten (to make them hashable pytree "meta" data), so a randomized
-        Model riding along in `info` makes every `step()` call under jit
-        pay that cost -- ~30x slower in practice. Keeping `self.mjx_model`
-        as a closure constant and `.replace()`-ing only the randomized
-        fields in here keeps those static fields flattened once, at
-        trace/compile time, exactly as before domain randomization existed.
-        """
+        base `self.mjx_model`."""
         return self.mjx_model.replace(**dr_params)
 
     # ------------------------------------------------------------------
@@ -298,13 +299,10 @@ class ErhuEnv(MjxEnv):
     def reset(self, rng: jax.Array) -> State:
         rng, env_rng = jax.random.split(rng, 2)
 
-        # Samples this episode's randomized model fields (friction/mass/
-        # damping + erhu placement jitter) and re-solves the
-        # bow-hair-between-strings IK against them. `dr_params` (just the
-        # handful of randomized arrays, not a full mjx.Model -- see
-        # `_effective_model`) is carried in `info` for the rest of the
-        # episode so step() keeps using these same randomized dynamics.
-        dr_params, data = domain_randomize_jax(self.mj_model, self.mjx_model, self.mjx_data, env_rng)
+        dr_params, data = domain_randomize_jax(
+            self.mjx_model, self.mjx_data, env_rng, self._erhu_pose_pool,
+            self._arm_qpos_idxs, self._arm_ctrl_aids, self._arm_ctrl_qpos_idxs,
+        )
         model = self._effective_model(dr_params)
 
         _, _, mid, _ = self._bow_geometry(data)
