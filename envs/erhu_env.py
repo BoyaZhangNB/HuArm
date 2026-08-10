@@ -415,15 +415,15 @@ class ErhuEnv(MjxEnv):
     def _reward_bow_touch_box(self, data: mjx.Data, k: Dict[str, jax.Array]) -> jax.Array:
         """Bow should ride at the top surface of (the curve top surface of) the sound box."""
         mid_local = self._relative(k["mid"], self._sound_box_id, data)
-        return jp.maximum(-1.0, -jp.square(mid_local[2] - self._sound_box_radius))
+        err = (mid_local[2] - self._sound_box_radius) / self._sound_box_radius
+        return 1.0 / (1.0 + jp.square(err))
 
     def _reward_string_center(self, data: mjx.Data, k: Dict[str, jax.Array]) -> jax.Array:
         """Bow center should stay within `string_tolerance` of the between-strings target."""
         target = self._between_strings_target(data)
         string_dist = jp.linalg.norm(k["mid"] - target)
-        return jp.maximum(
-            -1.0, -jp.square(jp.maximum(0.0, string_dist - self.string_tolerance))
-        )
+        err = jp.maximum(0.0, string_dist - self.string_tolerance) / self.string_tolerance
+        return 1.0 / (1.0 + jp.square(err))
 
     def _reward_contact_penalty(self, k: Dict[str, jax.Array]) -> jax.Array:
         """Penalize the largest contact force in the scene above the soft

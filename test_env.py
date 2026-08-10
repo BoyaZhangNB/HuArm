@@ -71,6 +71,7 @@ def main(xml_path):
 
     env = ErhuEnv(episode_time_limit=1000, max_ctrl_delta=0.05, f_safe=3, f_max=30)
     state = env.reset(jax.random.PRNGKey(0))
+    print(f"Environment reset.")
     model = env.mj_model
     data = mjx.get_data(model, state.pipeline_state)
 
@@ -95,7 +96,6 @@ def main(xml_path):
         print("Teleoperation loop running. Press ESC in viewer to exit.")
         print("Drag the actuator sliders in the viewer's Control panel to command the arm.")
         start = time.time()
-
         try:
             while viewer.is_running():
                 elapsed_real = time.time() - start
