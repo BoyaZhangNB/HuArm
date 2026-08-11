@@ -158,6 +158,7 @@ class ErhuEnv(MjxEnv):
             string_center=0.5,
             contact_penalty=1.0,
             forbidden=1.0,
+            termination=1.0,
         )
         if reward_weights:
             self.reward_weights.update(reward_weights)
@@ -462,8 +463,17 @@ class ErhuEnv(MjxEnv):
             return jp.asarray(0.0)
         return -jp.square(jp.maximum(0.0, self.forbidden_margin - k["forbidden_dist"]))
 
+    def _reward_termination(self, terminated: jax.Array) -> jax.Array:
+        """Flat penalty for any event that triggers `_termination`."""
+        return jp.where(terminated, -100.0, 0.0)
+
     def _reward_terms(
-        self, data: mjx.Data, k: Dict[str, jax.Array], action: jax.Array, info: Dict[str, Any]
+        self,
+        data: mjx.Data,
+        k: Dict[str, jax.Array],
+        action: jax.Array,
+        info: Dict[str, Any],
+        terminated: jax.Array,
     ) -> Dict[str, jax.Array]:
         return {
             "velocity": self._reward_velocity(k),
@@ -475,6 +485,7 @@ class ErhuEnv(MjxEnv):
             "string_center": self._reward_string_center(data, k),
             "contact_penalty": self._reward_contact_penalty(k),
             "forbidden": self._reward_forbidden(k),
+            "termination": self._reward_termination(terminated),
         }
 
     # ------------------------------------------------------------------
@@ -508,11 +519,12 @@ class ErhuEnv(MjxEnv):
         info: Dict[str, Any] = state.info.copy()
         k = self._step_kinematics(data, info, model)
 
-        terms = self._reward_terms(data, k, action, info)
+        terminated = self._termination(data, k)
+        terms = self._reward_terms(data, k, action, info, terminated)
         reward = sum(self.reward_weights[name] * term for name, term in terms.items())
         reward = reward.astype(jp.float32)
 
-        done = self._termination(data, k).astype(jp.float32)
+        done = terminated.astype(jp.float32)
 
         info["action_history"] = jp.concatenate(
             [info["action_history"][1:], action[None, :]], axis=0
