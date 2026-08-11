@@ -106,7 +106,7 @@ class ErhuEnv(MjxEnv):
         enable_forbidden_zone: bool = True,
         max_ctrl_delta: float = 0.05,
         episode_time_limit: float = 100.0,
-        f_max: float = 10.0,
+        f_max: float = 30.0,
         f_safe: float = 3.0,
         clip_penetration_limit: float = 0.01,
         string_tolerance: float = 0.15,
@@ -159,6 +159,7 @@ class ErhuEnv(MjxEnv):
             contact_penalty=1.0,
             forbidden=1.0,
             termination=1.0,
+            survival=1.0,
         )
         if reward_weights:
             self.reward_weights.update(reward_weights)
@@ -467,6 +468,11 @@ class ErhuEnv(MjxEnv):
         """Flat penalty for any event that triggers `_termination`."""
         return jp.where(terminated, -100.0, 0.0)
 
+    def _reward_survival(self, terminated: jax.Array) -> jax.Array:
+        """Flat bonus of 1 for every step the agent survives (not the
+        terminating step itself)."""
+        return jp.where(terminated, 0.0, 1.0)
+
     def _reward_terms(
         self,
         data: mjx.Data,
@@ -486,6 +492,7 @@ class ErhuEnv(MjxEnv):
             "contact_penalty": self._reward_contact_penalty(k),
             "forbidden": self._reward_forbidden(k),
             "termination": self._reward_termination(terminated),
+            "survival": self._reward_survival(terminated),
         }
 
     # ------------------------------------------------------------------
