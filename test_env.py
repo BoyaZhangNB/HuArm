@@ -12,6 +12,7 @@ from envs.erhu_env import ErhuEnv
 from envs.utils_envs import init_huarm, jacobian_ik, joint_to_actuator_id
 
 from utils import print_jp_dict, MetricsLogger
+from agents.obs_normalizer import init_running_norm, update_running_norm, normalize_obs
 
 # Arm joints whose IK is solved so that the bow_frog end-effector reaches the
 # single 3D position teleop sends -- teleop only ever specifies where the
@@ -84,6 +85,8 @@ def main(xml_path):
     next_tension_print = 0
     metrics_logger = MetricsLogger(live=True)
 
+    norm = init_running_norm(obs_size=state.obs.shape[0], dtype=jp.float32)
+
     _step = jax.jit(env.step)
     state = _step(state, jp.zeros(env.action_size))
     # Fill the same MjData object the viewer was launched with, rather than
@@ -120,6 +123,13 @@ def main(xml_path):
                     action[aid] = np.clip(delta / env.max_ctrl_delta, -1.0, 1.0)
 
                 state = _step(state, jp.asarray(action))
+
+                obs = jp.expand_dims(state.obs, 0)
+                norm = update_running_norm(norm, obs)
+                obs_norm = normalize_obs(norm, obs)
+
+                print(obs_norm)
+
                 if state.done:
                     print(f"\nEpisode terminated")
                     metrics_logger.plot("metrics.png")

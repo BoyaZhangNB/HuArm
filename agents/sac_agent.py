@@ -34,6 +34,12 @@ import optax
 from flax import linen as nn
 
 from training_interface import Agent, Transition
+from agents.obs_normalizer import (
+    RunningNorm,
+    init_running_norm,
+    normalize_obs,
+    update_running_norm,
+)
 
 
 class _ActorNet(nn.Module):
@@ -188,6 +194,7 @@ class SACAgent(Agent):
             "write_ptr": jp.zeros((), dtype=jp.int32),
             "buffer_size": jp.zeros((), dtype=jp.int32),
             "rng": rng,
+            "obs_norm": init_running_norm(self.obs_size),
         }
 
     def act(
@@ -198,6 +205,9 @@ class SACAgent(Agent):
         deterministic: bool = False,
     ) -> Tuple[jax.Array, Dict[str, jax.Array]]:
         params = train_state["actor_params"]
+        # Normalized with the running mean/std as of the *previous*
+        # iteration's update -- see agents/obs_normalizer.py.
+        obs = normalize_obs(train_state["obs_norm"], obs)
         if deterministic:
             mean, _ = self.actor_net.apply(params, obs)
             action = jp.tanh(mean)
@@ -240,6 +250,14 @@ class SACAgent(Agent):
         new_write_ptr = (write_ptr + total) % capacity
         new_buffer_size = jp.minimum(train_state["buffer_size"] + total, capacity)
 
+        # Fold this iteration's raw observations into the running estimate
+        # before sampling minibatches below, so every gradient step in this
+        # call (old buffer entries included) normalizes with the freshest
+        # stats -- unlike PPO, SAC's off-policy updates don't need the
+        # normalization to match what `act()` used when a sample was
+        # collected, since log_probs/values are always recomputed fresh.
+        new_obs_norm = update_running_norm(train_state["obs_norm"], obs)
+
         rng = train_state["rng"]
         init_carry = (
             train_state["actor_params"],
@@ -264,10 +282,12 @@ class SACAgent(Agent):
             sample_idx = jax.random.randint(
                 idx_rng, (self.batch_size,), 0, new_buffer_size
             )
-            mb_obs = buf_obs[sample_idx]
+            # Buffers hold raw observations regardless of when they were
+            # collected; normalize with the freshest running stats here.
+            mb_obs = normalize_obs(new_obs_norm, buf_obs[sample_idx])
             mb_action = buf_action[sample_idx]
             mb_reward = buf_reward[sample_idx]
-            mb_next_obs = buf_next_obs[sample_idx]
+            mb_next_obs = normalize_obs(new_obs_norm, buf_next_obs[sample_idx])
             mb_done = buf_done[sample_idx]
 
             alpha = jp.exp(log_alpha)
@@ -405,6 +425,7 @@ class SACAgent(Agent):
             "write_ptr": new_write_ptr,
             "buffer_size": new_buffer_size,
             "rng": rng,
+            "obs_norm": new_obs_norm,
         }
 
         param_leaves = (
@@ -425,5 +446,13 @@ class SACAgent(Agent):
         metrics["loss"] = metrics["critic_loss"] + metrics["actor_loss"]
         metrics["param_norm"] = param_norm
         metrics["params_isnan"] = params_isnan
+        # Running obs-normalization constants, carried through the metrics
+        # dict so callers (e.g. train.py) can persist them alongside the
+        # model without reaching into train_state.
+        metrics["obs_norm"] = {
+            "mean": new_obs_norm.mean,
+            "var": new_obs_norm.var,
+            "count": new_obs_norm.count,
+        }
 
         return new_train_state, metrics

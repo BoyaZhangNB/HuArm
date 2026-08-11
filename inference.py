@@ -5,8 +5,10 @@ import time
 from mujoco import mjx
 import jax
 import jax.numpy as jp
+import numpy as np
 from envs.erhu_env import ErhuEnv
 from agents.ppo_agent import PPOAgent
+from agents.obs_normalizer import RunningNorm
 
 from utils import print_jp_dict, MetricsLogger
 import orbax.checkpoint as ocp
@@ -32,7 +34,24 @@ def main(xml_path):
     # Initialize network
     agent_state = agent.init(jax.random.PRNGKey(0))
     restored_params = checkpointer.restore(path, agent_state["params"])
-    agent_state = {"params": restored_params, "opt_state": agent_state["opt_state"]}
+    obs_norm = agent_state["obs_norm"]
+    obs_norm_path = path.with_name(path.name + "_obs_norm.npz")
+    if obs_norm_path.exists():
+        # Saved by train.py at the end of training -- see train.py /
+        # agents/obs_normalizer.py. Without this, act() would normalize
+        # eval-time observations with the untrained (mean=0, var=1) stats
+        # instead of what the policy was actually trained on.
+        npz = np.load(obs_norm_path)
+        obs_norm = RunningNorm(
+            mean=jp.asarray(npz["mean"]), var=jp.asarray(npz["var"]), count=jp.asarray(npz["count"])
+        )
+    else:
+        print(f"[WARNING] {obs_norm_path} not found; using untrained obs normalization stats.")
+    agent_state = {
+        "params": restored_params,
+        "opt_state": agent_state["opt_state"],
+        "obs_norm": obs_norm,
+    }
 
     log_print_interval = 0.5
     next_tension_print = 0

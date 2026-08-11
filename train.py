@@ -2,6 +2,7 @@ import argparse
 from pathlib import Path
 
 import jax
+import numpy as np
 import orbax.checkpoint as ocp
 import yaml
 
@@ -49,8 +50,16 @@ def main():
     # 3. Train. Swapping `agent` swaps the whole algorithm; swapping the
     #    env class swaps the whole task/robot. Neither affects the other.
     logger = MetricsLogger(live=False)
+    # `agent.update()` carries the running observation-normalization
+    # constants through its metrics dict every iteration (see
+    # agents/obs_normalizer.py); stash the latest one here so it's still
+    # available below however training ends (full run or Ctrl-C -- `train()`
+    # catches KeyboardInterrupt internally and returns normally either way).
+    last_metrics: dict = {}
 
     def log_fn(it, metrics):
+        nonlocal last_metrics
+        last_metrics = metrics
         logger.log(it, metrics)
         eval_reward = metrics.get("eval_reward", float("nan"))
         param_norm = float(metrics["param_norm"])
@@ -83,6 +92,27 @@ def main():
     path = Path(train_cfg["checkpoint_path"]).resolve()
     checkpointer.save(path, params)
     checkpointer.wait_until_finished()
+
+    # Save the running observation-normalization constants training ended
+    # with, so inference/eval can reproduce the exact same obs scaling the
+    # policy was trained on. Prefer train_state (always current) over
+    # last_metrics's copy, which is only as fresh as the last logged
+    # iteration.
+    obs_norm = train_state.get("obs_norm")
+    if obs_norm is None and "obs_norm" in last_metrics:
+        obs_norm = last_metrics["obs_norm"]
+    if obs_norm is not None:
+        mean = obs_norm.mean if hasattr(obs_norm, "mean") else obs_norm["mean"]
+        var = obs_norm.var if hasattr(obs_norm, "var") else obs_norm["var"]
+        count = obs_norm.count if hasattr(obs_norm, "count") else obs_norm["count"]
+        obs_norm_path = path.with_name(path.name + "_obs_norm.npz")
+        print(f"Saving observation-normalization constants to {obs_norm_path}...")
+        np.savez(
+            obs_norm_path,
+            mean=np.asarray(mean),
+            var=np.asarray(var),
+            count=np.asarray(count),
+        )
 
 
 if __name__ == "__main__":

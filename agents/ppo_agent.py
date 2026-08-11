@@ -9,6 +9,12 @@ import optax
 from flax import linen as nn
 
 from training_interface import Agent, Transition
+from agents.obs_normalizer import (
+    RunningNorm,
+    init_running_norm,
+    normalize_obs,
+    update_running_norm,
+)
 
 class _PolicyNet(nn.Module):
     action_size: int
@@ -133,7 +139,8 @@ class PPOAgent(Agent):
         dummy_obs = jp.zeros((self.obs_size,), dtype=jp.float32)
         params = self.net.init(params_rng, dummy_obs)
         opt_state = self.optimizer.init(params)
-        return {"params": params, "opt_state": opt_state, "rng": rng}
+        obs_norm = init_running_norm(self.obs_size)
+        return {"params": params, "opt_state": opt_state, "rng": rng, "obs_norm": obs_norm}
 
     def act(
         self,
@@ -142,6 +149,9 @@ class PPOAgent(Agent):
         rng: jax.Array,
         deterministic: bool = False,
     ) -> Tuple[jax.Array, Dict[str, jax.Array]]:
+        # Normalized with the running mean/std as of the *previous*
+        # iteration's update -- see agents/obs_normalizer.py.
+        obs = normalize_obs(train_state["obs_norm"], obs)
         mean, log_std, value = self.net.apply(train_state["params"], obs)
         if deterministic:
             action = jp.tanh(mean)
@@ -159,6 +169,7 @@ class PPOAgent(Agent):
         params = train_state["params"]
         opt_state = train_state["opt_state"]
         rng = train_state["rng"]
+        obs_norm = train_state["obs_norm"]
 
         # `batch.done` is set on both true termination and episode-length
         # truncation (EpisodeWrapper); split them so we only skip bootstrapping
@@ -168,7 +179,11 @@ class PPOAgent(Agent):
         termination = batch.done * (1.0 - truncation)
 
         values = batch.extra["value"]
-        _, _, bootstrap_value = self.net.apply(params, batch.next_obs[-1])
+        # Same running stats `act()` used to normalize `batch.obs` during
+        # this rollout -- `obs_norm` isn't folded in until below, so this
+        # keeps the bootstrap value on the same scale as `values`.
+        norm_next_obs_last = normalize_obs(obs_norm, batch.next_obs[-1])
+        _, _, bootstrap_value = self.net.apply(params, norm_next_obs_last)
 
         advantages, value_targets = _compute_gae(
             rewards=batch.reward,
@@ -184,7 +199,12 @@ class PPOAgent(Agent):
         total = num_steps * num_envs
         flatten = lambda x: x.reshape((total,) + x.shape[2:])
 
-        obs = flatten(batch.obs)
+        raw_obs = flatten(batch.obs)
+        # Same running stats used above for the bootstrap value / used by
+        # `act()` to collect this batch -- updated (below) only after the
+        # loss uses them, so this iteration's optimization stays internally
+        # consistent.
+        obs = normalize_obs(obs_norm, raw_obs)
         action = flatten(batch.action)
         old_log_prob = flatten(batch.extra["log_prob"])
         advantages = flatten(advantages)
@@ -234,7 +254,17 @@ class PPOAgent(Agent):
             epoch_step, (params, opt_state), epoch_rngs
         )
 
-        new_train_state = {"params": params, "opt_state": opt_state, "rng": rng}
+        # Fold this iteration's raw observations into the running estimate
+        # *after* they've been used above, so the next iteration's act()/
+        # update() see it, not this one.
+        new_obs_norm = update_running_norm(obs_norm, raw_obs)
+
+        new_train_state = {
+            "params": params,
+            "opt_state": opt_state,
+            "rng": rng,
+            "obs_norm": new_obs_norm,
+        }
         param_leaves = jax.tree_util.tree_leaves(params)
         param_norm = optax.global_norm(params)
         params_isnan = jp.any(
@@ -247,5 +277,13 @@ class PPOAgent(Agent):
             "entropy": jp.mean(entropy),
             "param_norm": param_norm,
             "params_isnan": params_isnan,
+            # Running obs-normalization constants, carried through the
+            # metrics dict so callers (e.g. train.py) can persist them
+            # alongside the model without reaching into train_state.
+            "obs_norm": {
+                "mean": new_obs_norm.mean,
+                "var": new_obs_norm.var,
+                "count": new_obs_norm.count,
+            },
         }
         return new_train_state, metrics
