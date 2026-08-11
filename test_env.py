@@ -70,7 +70,7 @@ def print_all_contact(model, data):
 def main(xml_path):
     print(f"Using MuJoCo Version: {mujoco.__version__}")
 
-    env = ErhuEnv(episode_time_limit=1000, max_ctrl_delta=0.05, f_safe=3, f_max=30)
+    env = ErhuEnv(episode_time_limit=1000, max_ctrl_delta=0.05, f_safe=3, f_max=30, dr_pool_size=1)
     state = env.reset(jax.random.PRNGKey(0))
     print(f"Environment reset.")
     model = env.mj_model

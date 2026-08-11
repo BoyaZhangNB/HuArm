@@ -78,9 +78,7 @@ def main(xml_path):
                     time.sleep(0.01)
                     continue
                 
-                action, _ = agent.act(
-                    agent_state, state.obs, jax.random.PRNGKey(0), deterministic=True
-                )
+                action, _ = agent.act(agent_state, state.obs, jax.random.PRNGKey(0), deterministic=True)
                 print(f"Action: {action}")
 
                 state = _step(state, action)
@@ -92,10 +90,12 @@ def main(xml_path):
                 mjx.get_data_into(data, model, state.pipeline_state)
 
                 viewer.sync()
+                print_jp_dict(state.metrics)
+                time.sleep(10)
 
                 if data.time >= next_tension_print:
                     next_tension_print = data.time + log_print_interval
-                    # print_jp_dict(state.metrics)
+                    print_jp_dict(state.metrics)
                     metrics_logger.log(data.time, state.metrics["reward_terms"])
 
         except KeyboardInterrupt:
