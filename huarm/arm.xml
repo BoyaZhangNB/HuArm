@@ -1,6 +1,6 @@
 <mujoco model="simple_arm">
 
-    <compiler angle="degree" autolimits="true"/>
+    <compiler angle="radian" autolimits="true"/>
 
     <default>
         <default class="arm">
