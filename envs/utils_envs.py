@@ -274,7 +274,8 @@ def build_erhu_pose_pool(mj_model, mjx_model, rng, pool_size,
             print(f"Building erhu pose pool: sample {i+1}/{pool_size}", end="\r")
             rng, pos_rng, tilt_rng = jax.random.split(rng, 3)
 
-            body_pos = nominal_pos + erhu_pos_std * np.asarray(jax.random.normal(pos_rng, (3,)))
+            pos_noise = erhu_pos_std * np.asarray([*jax.random.normal(pos_rng, (1,)), 0.0, 0.0])
+            body_pos = nominal_pos + pos_noise
             # Small-angle random tilt composed onto the nominal orientation,
             # as a unit quaternion (w, x, y, z); avoids re-normalizing a
             # hand-built axis so the result stays a valid rotation even at
