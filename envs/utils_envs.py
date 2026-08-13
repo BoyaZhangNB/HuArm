@@ -61,11 +61,18 @@ def jacobian_ik(model, data, body_points, target_pos, joint_names,
 
     body_points is a list of (body_name, local_offset, weight) triples, see
     weighted_point_and_jacobian.
+
+    joint_names may include unactuated joints (e.g. the passive bow_frog_hinge)
+    as extra free DOFs for the solver to use -- their qpos gets solved for and
+    written just like any actuated joint, it just never gets copied into ctrl
+    (see set_joint_ctrl). Joints with hard limits (jnt_limited) are clamped to
+    model.jnt_range after every step so the solver can't swing them past their
+    physical stops; unlimited joints (e.g. joint1..4) are unaffected.
     """
-    dof_idxs = [model.jnt_dofadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn)]
-                for jn in joint_names]
-    qpos_idxs = [model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn)]
-                 for jn in joint_names]
+    jids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn) for jn in joint_names]
+    dof_idxs = [model.jnt_dofadr[jid] for jid in jids]
+    qpos_idxs = [model.jnt_qposadr[jid] for jid in jids]
+    limits = [model.jnt_range[jid] if model.jnt_limited[jid] else None for jid in jids]
 
     for it in range(max_iters):
         mujoco.mj_forward(model, data)
@@ -74,13 +81,15 @@ def jacobian_ik(model, data, body_points, target_pos, joint_names,
         err_norm = np.linalg.norm(err)
         if err_norm < tol:
             return it, err_norm
-        
+
         dtheta = J.T @ np.linalg.solve(J @ J.T + damping**2 * np.eye(3), err)
         step_norm = np.linalg.norm(dtheta)
         if step_norm > step_clip:
             dtheta *= step_clip / step_norm
-        for qidx, d in zip(qpos_idxs, dtheta):
+        for qidx, d, lim in zip(qpos_idxs, dtheta, limits):
             data.qpos[qidx] += d
+            if lim is not None:
+                data.qpos[qidx] = np.clip(data.qpos[qidx], lim[0], lim[1])
 
     mujoco.mj_forward(model, data)
     point, _ = weighted_point_and_jacobian(model, data, body_points, dof_idxs)
@@ -112,7 +121,8 @@ def joint_to_actuator_id(model, joint_name):
     return -1
 
 
-def insert_hair_between_strings(model, data, arm_joint_names=("joint1", "joint2", "joint3", "joint4"),
+def insert_hair_between_strings(model, data,
+                                 arm_joint_names=("joint1", "joint2", "joint3", "joint4", "bow_frog_hinge"),
                                  joint_noise_std=0.0):
     """
     Solves arm IK to place the bow stick midpoint between the erhu strings.
@@ -120,6 +130,13 @@ def insert_hair_between_strings(model, data, arm_joint_names=("joint1", "joint2"
     equality constraints), positioning bow_link_0 / bow_tip via arm IK is
     sufficient to place the hair as well -- it simply follows the bow's
     kinematic chain, no separate hair layout/pretension step is needed.
+
+    arm_joint_names includes the passive, unactuated bow_frog_hinge as an
+    extra free DOF: it sits between end_effector and the bow chain, so
+    letting IK solve for it (in addition to the 4 actuated arm joints) gives
+    the solver an extra way to reduce positional error and gives the hinge a
+    physically sensible initial angle instead of leaving it at 0. It never
+    gets copied into ctrl since it has no actuator (see set_joint_ctrl).
 
     `joint_noise_std` (radians), if > 0, perturbs each arm joint's qpos by
     independent Gaussian noise after the IK solve converges, then re-runs
@@ -136,10 +153,13 @@ def insert_hair_between_strings(model, data, arm_joint_names=("joint1", "joint2"
     print(f"Arm IK converged in {iters} iterations, final position error {err:.6f} m")
 
     if joint_noise_std > 0:
-        qpos_idxs = [model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn)]
-                     for jn in arm_joint_names]
-        for qidx in qpos_idxs:
+        jids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn) for jn in arm_joint_names]
+        for jid in jids:
+            qidx = model.jnt_qposadr[jid]
             data.qpos[qidx] += np.random.normal(0.0, joint_noise_std)
+            if model.jnt_limited[jid]:
+                lo, hi = model.jnt_range[jid]
+                data.qpos[qidx] = np.clip(data.qpos[qidx], lo, hi)
         mujoco.mj_forward(model, data)
 
     set_joint_ctrl(model, data, arm_joint_names)
@@ -161,7 +181,7 @@ def init_huarm(model, data, id_dict=None, joint_noise_std=0.0):
 
 
 # ==================================================
-def arm_joint_indices(mj_model, arm_joint_names=("joint1", "joint2", "joint3", "joint4")):
+def arm_joint_indices(mj_model, arm_joint_names=("joint1", "joint2", "joint3", "joint4", "bow_frog_hinge")):
     """
     Precomputes, once per model (e.g. at env init), the static index arrays
     needed by `domain_randomize_jax` / `_set_joint_ctrl_jax` each reset --
@@ -242,7 +262,7 @@ def domain_randomize_jax(mjx_model, mjx_data, rng, erhu_pose_pool,
 # ==================================================
 
 def build_erhu_pose_pool(mj_model, mjx_model, rng, pool_size,
-                          arm_joint_names=("joint1", "joint2", "joint3", "joint4"),
+                          arm_joint_names=("joint1", "joint2", "joint3", "joint4", "bow_frog_hinge"),
                           erhu_pos_std=0.05, erhu_tilt_std=0.03):
     """
     Precomputes `pool_size` random erhu placements (erhu_root's body_pos/

@@ -389,7 +389,8 @@ class ErhuEnv(MjxEnv):
         # Bow should move in the normal direction of the cynlider.
         lateral_vel = jp.dot(bow_vel_local, self._lateral_axis_local)
 
-        touching, min_dist = self._bow_string_contact(data)
+        # touching, min_dist = self._bow_string_contact(data)
+        touching = jp.where(bow_a_force > 0.0, jp.asarray(1.0), jp.asarray(0.0))
         contact_steps = jp.where(touching, info["contact_steps"] + 1.0, 0.0)
 
         desired_velocity, desired_pressure = desired_velocity_and_pressure(model, data)
@@ -404,7 +405,6 @@ class ErhuEnv(MjxEnv):
             bow_axis=bow_axis,
             lateral_vel=lateral_vel,
             touching=touching,
-            min_dist=min_dist,
             contact_steps=contact_steps,
             desired_velocity=desired_velocity,
             desired_pressure=desired_pressure,

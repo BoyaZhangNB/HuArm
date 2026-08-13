@@ -267,7 +267,7 @@ def main():
 
                     if not awaiting_reset:
                         offset = np.clip(
-                            [-pkt["x"], pkt["z"], pkt["y"]], -args.max_offset, args.max_offset
+                            [pkt["x"], -pkt["z"], pkt["y"]], -args.max_offset, args.max_offset
                         )
                         target = ee_origin + offset
 
