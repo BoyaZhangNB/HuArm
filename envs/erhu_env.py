@@ -200,6 +200,13 @@ class ErhuEnv(MjxEnv):
         # concrete/static contact index, not a traced one).
         self._ncon = int(_get_contact(self.mjx_data).geom.shape[0])
 
+        # Bow-hair/string contact-detection tolerance -- both pairs share
+        # the "bow_hair_string_contact" class in arm.xml, so read it once
+        # from either pair rather than hard-coding it here.
+        pair_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_PAIR, "bow_hair_string_D_pair")
+        self._bow_string_margin = float(m.pair_margin[pair_id])
+        self._bow_string_gap = float(m.pair_gap[pair_id])
+
         self._sound_box_radius = float(m.geom_size[self._sound_box_geom_id][0])
         self._ctrl_lo = self.mjx_model.actuator_ctrlrange[:, 0]
         self._ctrl_hi = self.mjx_model.actuator_ctrlrange[:, 1]
@@ -246,7 +253,8 @@ class ErhuEnv(MjxEnv):
 
     def _bow_string_contact(self, data: mjx.Data):
         """Returns (touching, min_dist) for the bow hair vs. either string. Not taking into account for contact margin"""
-        margin = 0.0015
+        margin = self._bow_string_margin
+        gap = self._bow_string_gap
         contact = _get_contact(data)
         g1, g2, dist = contact.geom[:, 0], contact.geom[:, 1], contact.dist
         is_pair = (
@@ -257,7 +265,7 @@ class ErhuEnv(MjxEnv):
             & ((g1 == self._string_a_geom_id) | (g1 == self._string_d_geom_id))
         )
         
-        active = is_pair & (dist < margin)
+        active = is_pair & (dist < margin + gap)
         touching = jp.any(active)
         min_dist = jp.min(jp.where(active, dist, jp.inf))
         return touching, min_dist

@@ -17,6 +17,15 @@
                   contype="2" conaffinity="1"
                   friction="1.2 0.02 0.001" solref="0.015 1" solimp="0.9 0.95 0.002" condim="3"/>
         </default>
+
+        <default class="bow_hair_string_contact">
+            <pair condim="3"
+                  friction="0.9 0.9 0.02 0.001 0.001"
+                  solref="0.015 4"
+                  solimp="0.9 0.95 0.002"
+                  margin="0.0002"
+                  gap="0.02"/>
+        </default>
     </default>
 
     <worldbody>
@@ -134,18 +143,10 @@
     <include file="erhu.xml"/>
 
     <contact>
-        <pair geom1="bow_hair_geom" geom2="string_D_geom"
-              condim="3"
-              friction="0.9 0.9 0.02 0.001 0.001"
-              solref="0.015 4"
-              solimp="0.9 0.95 0.002"
-              margin="0.0015"/>
-        <pair geom1="bow_hair_geom" geom2="string_A_geom"
-              condim="3"
-              friction="0.9 0.9 0.02 0.001 0.001"
-              solref="0.015 4"
-              solimp="0.9 0.95 0.002"
-              margin="0.0015"/>
+        <pair name="bow_hair_string_D_pair" class="bow_hair_string_contact"
+              geom1="bow_hair_geom" geom2="string_D_geom"/>
+        <pair name="bow_hair_string_A_pair" class="bow_hair_string_contact"
+              geom1="bow_hair_geom" geom2="string_A_geom"/>
     </contact>
 
 </mujoco>
