@@ -17,7 +17,7 @@
     <geom name="floor" type="plane" size="2 2 0.1" rgba="0.3 0.3 0.3 1" contype="0" conaffinity="0"/>
 
     <!-- ============================ ERHU BODY ============================ -->
-    <body name="erhu_root" pos="0 0 0.5" euler="0 0 0.25">
+    <body name="erhu_root" pos="0.3 0 0.4" euler="0 0 -0.35">
       <!--joint name="erhu_root_free" type="free"/-->
 
       <body name="sound_box" pos="0 0 0">

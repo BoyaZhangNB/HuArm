@@ -263,7 +263,7 @@ def domain_randomize_jax(mjx_model, mjx_data, rng, erhu_pose_pool,
 
 def build_erhu_pose_pool(mj_model, mjx_model, rng, pool_size,
                           arm_joint_names=("joint1", "joint2", "joint3", "joint4", "bow_frog_hinge"),
-                          erhu_pos_std=0.05, erhu_tilt_std=0.03):
+                          erhu_pos_std=0.05, erhu_tilt_std=0.05):
     """
     Precomputes `pool_size` random erhu placements (erhu_root's body_pos/
     body_quat, jittered by a small translation and tilt) and the arm's
@@ -300,7 +300,7 @@ def build_erhu_pose_pool(mj_model, mjx_model, rng, pool_size,
             # as a unit quaternion (w, x, y, z); avoids re-normalizing a
             # hand-built axis so the result stays a valid rotation even at
             # sampled extremes.
-            tilt_axis_angle = erhu_tilt_std * np.asarray(jax.random.normal(tilt_rng, (3,)))
+            tilt_axis_angle = erhu_tilt_std * np.asarray([0.0, 0.0, *jax.random.normal(tilt_rng, (1,))])
             tilt_angle = float(np.linalg.norm(tilt_axis_angle)) + 1e-8
             tilt_axis = tilt_axis_angle / tilt_angle
             tilt_quat = np.concatenate([[np.cos(tilt_angle / 2)], tilt_axis * np.sin(tilt_angle / 2)])
