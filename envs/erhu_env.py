@@ -92,8 +92,9 @@ def forbidden_area_distance(mjx_model: mjx.Model, data: mjx.Data) -> jax.Array:
 class ErhuEnv(MjxEnv):
     """Erhu bowing task for the HuArm robot. n_frames is frame_skip.
 
-    Action space: normalized delta on the 4 arm position actuators
-    (joint1..joint4), i.e. action in [-1, 1]^4 scaled by `max_ctrl_delta`
+    Action space: normalized delta on the 5 arm position actuators
+    (joint1, joint2, joint5, joint3, joint4 -- actuator order), i.e.
+    action in [-1, 1]^5 scaled by `max_ctrl_delta`
     (radians) and added to the previous actuator target each step.
 
     ctrl target is clamped to `mjx_model.actuator_ctrlrange` each step.
@@ -125,7 +126,7 @@ class ErhuEnv(MjxEnv):
 
         self._erhu_pose_pool = build_erhu_pose_pool(
             self.mj_model, self.mjx_model,
-            jax.random.PRNGKey(dr_pool_seed), dr_pool_size,
+            jax.random.PRNGKey(dr_pool_seed), dr_pool_size, seed=dr_pool_seed,
         )
 
         # Static arm-joint index arrays for domain_randomize_jax /
@@ -133,7 +134,8 @@ class ErhuEnv(MjxEnv):
         # reset() to cut python-side mj_name2id lookups off the hot path.
         (self._arm_qpos_idxs,
          self._arm_ctrl_aids,
-         self._arm_ctrl_qpos_idxs) = arm_joint_indices(self.mj_model)
+         self._arm_ctrl_qpos_idxs,
+         self._arm_act_idxs) = arm_joint_indices(self.mj_model)
 
         self.n_stack = n_stack
         self.enable_forbidden_zone = enable_forbidden_zone
@@ -312,6 +314,7 @@ class ErhuEnv(MjxEnv):
         dr_params, data = domain_randomize_jax(
             self.mjx_model, self.mjx_data, env_rng, self._erhu_pose_pool,
             self._arm_qpos_idxs, self._arm_ctrl_aids, self._arm_ctrl_qpos_idxs,
+            self._arm_act_idxs,
         )
         model = self._effective_model(dr_params)
 

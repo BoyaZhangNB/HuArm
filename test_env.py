@@ -17,7 +17,7 @@ from agents.obs_normalizer import init_running_norm, update_running_norm, normal
 # Arm joints whose IK is solved so that the bow_frog end-effector reaches the
 # single 3D position teleop sends -- teleop only ever specifies where the
 # end effector should be, not individual joint angles.
-ARM_JOINT_NAMES = ("joint1", "joint2", "joint3", "joint4")
+ARM_JOINT_NAMES = ("joint1", "joint2", "joint5", "joint3", "joint4")
 
 
 def get_desired_position(t):
@@ -50,6 +50,17 @@ def compute_arm_ctrl_for_target(model, ik_data, target_pos, joint_names,
                  for jn in joint_names]
     return {jn: ik_data.qpos[qi] for jn, qi in zip(joint_names, qpos_idxs)}
 
+# --- TEMPORARY: lets you trigger env.reset() by pressing Enter in the
+# terminal while the viewer loop is running. Remove once no longer needed.
+def _listen_for_reset_key(reset_event):
+    while True:
+        try:
+            input()
+        except EOFError:
+            break
+        reset_event.set()
+
+
 def print_all_contact(model, data):
     print("\n--- Theoretically Allowed Contact Pairs ---")
     for i in range(model.ngeom):
@@ -70,8 +81,8 @@ def print_all_contact(model, data):
 def main(xml_path):
     print(f"Using MuJoCo Version: {mujoco.__version__}")
 
-    env = ErhuEnv(episode_time_limit=1000, max_ctrl_delta=0.05, f_safe=3, f_max=30, dr_pool_size=1, dr_pool_seed=1230)
-    state = env.reset(jax.random.PRNGKey(0))
+    env = ErhuEnv(episode_time_limit=1000, max_ctrl_delta=0.05, f_safe=3, f_max=30, dr_pool_seed=420)
+    state = env.reset(jax.random.PRNGKey(20))
     print(f"Environment reset.")
     model = env.mj_model
     data = mjx.get_data(model, state.pipeline_state)
@@ -94,6 +105,13 @@ def main(xml_path):
     mjx.get_data_into(data, model, state.pipeline_state)
     sim_ctrl = data.ctrl.copy()  # viewer writes directly into data.ctrl on its own thread
 
+    # TEMPORARY: background thread that sets reset_event whenever Enter is
+    # pressed in the terminal, so the main loop below can reset the env.
+    reset_event = threading.Event()
+    reset_key_counter = [0]
+    threading.Thread(target=_listen_for_reset_key, args=(reset_event,), daemon=True).start()
+    print("Press Enter in this terminal at any time to reset the environment.")
+
     with mujoco.viewer.launch_passive(model, data) as viewer:
         viewer.sync()
         print("Teleoperation loop running. Press ESC in viewer to exit.")
@@ -101,6 +119,17 @@ def main(xml_path):
         start = time.time()
         try:
             while viewer.is_running():
+                if reset_event.is_set():
+                    reset_event.clear()
+                    reset_key_counter[0] += 1
+                    state = env.reset(jax.random.PRNGKey(20 + reset_key_counter[0]))
+                    state = _step(state, jp.zeros(env.action_size))
+                    mjx.get_data_into(data, model, state.pipeline_state)
+                    sim_ctrl = data.ctrl.copy()
+                    viewer.sync()
+                    start = time.time()
+                    print("\nEnvironment reset (manual).")
+
                 elapsed_real = time.time() - start
                 print(f"Sim time {data.time:.3f}, elapsed real time {elapsed_real:.3f}", end="\r")
 
@@ -124,11 +153,11 @@ def main(xml_path):
 
                 state = _step(state, jp.asarray(action))
 
-                obs = jp.expand_dims(state.obs, 0)
-                norm = update_running_norm(norm, obs)
-                obs_norm = normalize_obs(norm, obs)
+                # obs = jp.expand_dims(state.obs, 0)
+                # norm = update_running_norm(norm, obs)
+                # obs_norm = normalize_obs(norm, obs)
+                # print(f"Normalized obs: {obs_norm}")
 
-                print(obs_norm)
 
                 if state.done:
                     print(f"\nEpisode terminated")

@@ -54,7 +54,7 @@ import jax.numpy as jp
 from mujoco import mjx
 
 from envs.erhu_env import ErhuEnv
-from envs.utils_envs import jacobian_ik
+from envs.utils_envs import jacobian_ik, joint_to_actuator_id
 
 
 # ---------------------------------------------------------------------------
@@ -169,24 +169,33 @@ class DemoRecorder:
 
 # ---------------------------------------------------------------------------
 
-ARM_JOINT_NAMES = ("joint1", "joint2", "joint3", "joint4")
+ARM_JOINT_NAMES = ("joint1", "joint2", "joint5", "joint3", "joint4")
 
 
-def solve_ik(model, ik_data, current_qpos, target_world_pos):
-    """Damped-least-squares IK for the arm's 4 joints, warm-started from
+def solve_ik(model, ik_data, current_qpos, target_world_pos, prev_ctrl):
+    """Damped-least-squares IK for the arm's 5 joints, warm-started from
     `current_qpos` (the arm's current live pose) so each call only has to
     correct a small per-step delta -- fast enough for a real-time control
-    loop. Returns clipped target joint angles (one per arm actuator, same
-    order as ARM_JOINT_NAMES)."""
+    loop.
+
+    Returns a full ctrl-shaped vector of target joint angles, scattered by
+    actuator id (so it does not depend on ARM_JOINT_NAMES happening to be in
+    the same order as the model's actuators); any actuator not driven by one
+    of ARM_JOINT_NAMES keeps its previous target from `prev_ctrl`."""
     ik_data.qpos[:] = current_qpos
     body_points = [("end_effector", np.zeros(3), 1.0)]
     jacobian_ik(
         model, ik_data, body_points, target_world_pos, list(ARM_JOINT_NAMES),
         max_iters=20, damping=1e-2, step_clip=0.05, tol=1e-4,
     )
-    qpos_idxs = [model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn)]
-                 for jn in ARM_JOINT_NAMES]
-    return np.array([ik_data.qpos[i] for i in qpos_idxs])
+    target_ctrl = np.array(prev_ctrl, dtype=np.float64)
+    for jn in ARM_JOINT_NAMES:
+        aid = joint_to_actuator_id(model, jn)
+        if aid < 0:
+            continue
+        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn)
+        target_ctrl[aid] = ik_data.qpos[model.jnt_qposadr[jid]]
+    return target_ctrl
 
 
 def main():
@@ -273,8 +282,10 @@ def main():
 
                         prev_ctrl = np.array(state.pipeline_state.ctrl)
                         current_qpos = np.array(state.pipeline_state.qpos)
-                        target_qpos = solve_ik(model, ik_data, current_qpos, target)
-                        target_ctrl = np.clip(target_qpos, ctrl_lo, ctrl_hi)
+                        target_ctrl = np.clip(
+                            solve_ik(model, ik_data, current_qpos, target, prev_ctrl),
+                            ctrl_lo, ctrl_hi,
+                        )
 
                         action = np.clip(
                             (target_ctrl - prev_ctrl) / env.max_ctrl_delta, -1.0, 1.0
