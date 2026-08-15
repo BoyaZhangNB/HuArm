@@ -17,6 +17,7 @@ import Foundation
 final class TeleopViewModel: ObservableObject {
     @Published var host: String = "192.168.1.149"
     @Published var port: String = "5005"
+    @Published var tcpPort: String = "5006"
     @Published var isStreaming = false
     @Published var isCollecting = false
     @Published var lastResetAt: Date?
@@ -42,14 +43,16 @@ final class TeleopViewModel: ObservableObject {
     }
 
     var canStart: Bool {
-        UInt16(port) != nil && !host.trimmingCharacters(in: .whitespaces).isEmpty
+        UInt16(port) != nil && UInt16(tcpPort) != nil
+            && !host.trimmingCharacters(in: .whitespaces).isEmpty
     }
 
     func startStreaming() {
         guard let portNum = UInt16(port) else { return }
+        guard let tcpPortNum = UInt16(tcpPort) else { return }
         arManager.start()
         udpClient.connect(host: host, port: portNum)
-        tcpClient.connect(host: host, port: portNum)
+        tcpClient.connect(host: host, port: tcpPortNum)
         isStreaming = true
 
         timerCancellable = Timer.publish(every: 1.0 / sendRateHz, on: .main, in: .common)

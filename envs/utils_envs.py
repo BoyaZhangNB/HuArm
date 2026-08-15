@@ -79,9 +79,12 @@ def weighted_point_and_jacobian(model, data, body_points, dof_idxs):
 
 
 def jacobian_ik(model, data, body_points, target_pos, joint_names,
-                max_iters=200, damping=1e-2, step_clip=0.1, tol=1e-4):
+                max_iters=200, damping=1e-2, step_clip=0.1, tol=1e-4,
+                angle_body=None, angle_local_dir=None, target_angle=None,
+                angle_weight=1.0, angle_tol=1e-3):
     """
-    Damped-least-squares IK to position specified target point combination.
+    Damped-least-squares IK to position specified target point combination,
+    optionally augmented with a single angle-to-ground constraint.
 
     body_points is a list of (body_name, local_offset, weight) triples, see
     weighted_point_and_jacobian.
@@ -92,21 +95,71 @@ def jacobian_ik(model, data, body_points, target_pos, joint_names,
     (see set_joint_ctrl). Joints with hard limits (jnt_limited) are clamped to
     model.jnt_range after every step so the solver can't swing them past their
     physical stops; unlimited joints (e.g. joint1..5) are unaffected.
+
+    Passing `target_angle` (radians) together with `angle_body` and
+    `angle_local_dir` (a 3-vector fixed in `angle_body`'s local frame, not
+    necessarily normalized -- e.g. a link's long axis) adds one extra scalar
+    row to the least-squares system: the angle between that direction,
+    rotated to world frame, and the horizontal ground plane (arcsin of its
+    normalized world-frame z-component) is driven to `target_angle`, via the
+    body's rotational Jacobian (d(world_dir)/dq_i = jacr_col_i x world_dir,
+    chained through d(arcsin)/du_z) stacked below the position Jacobian, and
+    the angle error stacked below the position error -- the same recipe as
+    stacking a 3-row orientation constraint, just for one row instead of
+    three, which is both cheaper and much better conditioned on an arm with
+    few DOF. `angle_weight` scales that row before combining, same role as
+    the position/rotation weighting elsewhere. Convergence requires the
+    position error norm < tol and, when the angle constraint is enabled, the
+    angle error < angle_tol.
+
+    If `target_angle` is None (the default), behavior is unchanged from
+    plain position-only IK.
     """
     jids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn) for jn in joint_names]
     dof_idxs = [model.jnt_dofadr[jid] for jid in jids]
     qpos_idxs = [model.jnt_qposadr[jid] for jid in jids]
     limits = [model.jnt_range[jid] if model.jnt_limited[jid] else None for jid in jids]
 
+    angle_bid = None
+    if target_angle is not None:
+        if angle_body is None or angle_local_dir is None:
+            raise ValueError("angle_body and angle_local_dir are required when target_angle is given")
+        angle_bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, angle_body)
+        local_dir = np.asarray(angle_local_dir, dtype=np.float64)
+        local_dir = local_dir / np.linalg.norm(local_dir)
+
+    def _angle_err_and_jac():
+        xmat = data.xmat[angle_bid].reshape(3, 3)
+        u = xmat @ local_dir
+        uz = np.clip(u[2], -1.0, 1.0)
+        current_angle = np.arcsin(uz)
+        jacr = np.zeros((3, model.nv))
+        mujoco.mj_jacBody(model, data, None, jacr, angle_bid)
+        duz_dq = np.cross(jacr[:, dof_idxs].T, u)[:, 2]
+        denom = max(np.sqrt(max(1.0 - uz**2, 1e-8)), 1e-4)
+        dangle_dq = duz_dq / denom
+        return target_angle - current_angle, dangle_dq
+
     for it in range(max_iters):
         mujoco.mj_forward(model, data)
         point, J = weighted_point_and_jacobian(model, data, body_points, dof_idxs)
-        err = target_pos - point
-        err_norm = np.linalg.norm(err)
-        if err_norm < tol:
-            return it, err_norm
+        pos_err = target_pos - point
+        pos_err_norm = np.linalg.norm(pos_err)
 
-        dtheta = J.T @ np.linalg.solve(J @ J.T + damping**2 * np.eye(3), err)
+        if angle_bid is None:
+            if pos_err_norm < tol:
+                return it, pos_err_norm
+            err, Jfull = pos_err, J
+        else:
+            angle_err, dangle_dq = _angle_err_and_jac()
+            if pos_err_norm < tol and abs(angle_err) < angle_tol:
+                return it, pos_err_norm, angle_err
+            err = np.concatenate([pos_err, [angle_weight * angle_err]])
+            Jfull = np.concatenate([J, (angle_weight * dangle_dq).reshape(1, -1)], axis=0)
+
+        dtheta = Jfull.T @ np.linalg.solve(
+            Jfull @ Jfull.T + damping**2 * np.eye(Jfull.shape[0]), err
+        )
         step_norm = np.linalg.norm(dtheta)
         if step_norm > step_clip:
             dtheta *= step_clip / step_norm
@@ -117,7 +170,11 @@ def jacobian_ik(model, data, body_points, target_pos, joint_names,
 
     mujoco.mj_forward(model, data)
     point, _ = weighted_point_and_jacobian(model, data, body_points, dof_idxs)
-    return max_iters, np.linalg.norm(target_pos - point)
+    pos_err_norm = np.linalg.norm(target_pos - point)
+    if angle_bid is None:
+        return max_iters, pos_err_norm
+    angle_err, _ = _angle_err_and_jac()
+    return max_iters, pos_err_norm, angle_err
 
 
 def set_joint_ctrl(model, data, joint_names):

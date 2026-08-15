@@ -21,6 +21,10 @@ struct ContentView: View {
                         .keyboardType(.numberPad)
                         .disabled(viewModel.isStreaming)
 
+                    TextField("TCP port", text: $viewModel.tcpPort)
+                        .keyboardType(.numberPad)
+                        .disabled(viewModel.isStreaming)
+
                     Button {
                         viewModel.isStreaming ? viewModel.stopStreaming() : viewModel.startStreaming()
                     } label: {
