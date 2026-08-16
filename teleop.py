@@ -211,6 +211,47 @@ class TCPReceiver(threading.Thread):
 
 
 # ---------------------------------------------------------------------------
+# BC obs patching -- ErhuEnv._get_obs bakes in a fixed, sinusoidal
+# desired_velocity/desired_pressure placeholder (see
+# `desired_velocity_and_pressure` in erhu_env.py), meant for RL where the
+# policy is scored against that schedule. A human teleop operator isn't
+# tracking it -- they're just moving the phone -- so logging obs unmodified
+# would train BC against a "desired" value the expert action had nothing to
+# do with. Instead we overwrite those two slots with the *actual*
+# velocity/pressure the expert's action produced (already computed by
+# ErhuEnv.step into `state.metrics`), so the logged demo is self-consistent:
+# desired trivially equals actual, and the expert action always maximizes
+# the velocity/pressure reward terms. This stays entirely in teleop.py by
+# design -- erhu_env.py has no BC-specific knowledge -- so the offset is
+# recomputed here from the env's own fixed `_get_obs` block order rather
+# than exposed by the env itself.
+# ---------------------------------------------------------------------------
+
+def _force_sensor_dim(model) -> int:
+    sensor_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, "bow_arm_contact")
+    return int(model.sensor_dim[sensor_id])
+
+
+def desired_velocity_obs_idx(model) -> int:
+    """Index of `desired_velocity` within ErhuEnv._get_obs's obs vector
+    (`desired_pressure` immediately follows it). Mirrors that method's fixed
+    concatenation order: qpos, qvel, sound_box_rel(3), rel_quat(4),
+    frog_rel(3), tip_rel(3), mid_rel(3), force(force_dim),
+    [desired_velocity, desired_pressure], forbidden_dist,
+    ... -- update this if that layout ever changes."""
+    return model.nq + model.nv + 3 + 4 + 3 + 3 + 3 + _force_sensor_dim(model)
+
+
+def patch_desired_velocity_pressure(obs, idx: int, velocity: float, pressure: float) -> np.ndarray:
+    """Returns a copy of `obs` with the desired_velocity/desired_pressure
+    slots (at `idx`, `idx + 1`) overwritten by the given actual values."""
+    obs = np.array(obs, dtype=np.float32, copy=True)
+    obs[idx] = velocity
+    obs[idx + 1] = pressure
+    return obs
+
+
+# ---------------------------------------------------------------------------
 # Demo recorder -- one .npz per collected episode.
 # ---------------------------------------------------------------------------
 
@@ -218,9 +259,12 @@ class DemoRecorder:
     """Buffers (obs, action, ...) for imitation learning and flushes each
     episode to its own compressed .npz on `stop_and_save`.
 
-    `obs`/`action` are logged exactly as passed to/returned by `ErhuEnv`, so
-    a saved demo can be replayed through the same policy interface used at
-    train/inference time (see inference.py's `agent.act(obs, ...)` call).
+    `action` is logged exactly as passed to/returned by `ErhuEnv`. `obs` has
+    its desired_velocity/desired_pressure slots overwritten with the
+    expert's actual values before being passed in here -- see
+    `patch_desired_velocity_pressure` -- so a saved demo is NOT byte-for-byte
+    what `ErhuEnv` itself would have produced, but is what a BC policy
+    trained on it should see (see inference.py's `agent.act(obs, ...)` call).
     """
 
     def __init__(self, out_dir: Path):
@@ -356,6 +400,7 @@ def main():
     ctrl_lo = np.array(model.actuator_ctrlrange[:, 0])
     ctrl_hi = np.array(model.actuator_ctrlrange[:, 1])
     ik_data = mujoco.MjData(model)  # scratch data for jacobian_ik; never touched by the viewer
+    desired_vp_idx = desired_velocity_obs_idx(model)  # see patch_desired_velocity_pressure
 
     rng = jax.random.PRNGKey(args.seed)
     rng, sub = jax.random.split(rng)
@@ -457,8 +502,16 @@ def main():
                         mjx.get_data_into(data, model, state.pipeline_state)
                         viewer.sync()
 
+                        # Log obs with desired_velocity/desired_pressure
+                        # replaced by the expert's actual values this step
+                        # (see the BC obs patching block above), not
+                        # ErhuEnv's placeholder schedule.
+                        logged_obs = patch_desired_velocity_pressure(
+                            state.obs, desired_vp_idx,
+                            state.metrics["bow_velocity"], state.metrics["bow_a_force_ema"],
+                        )
                         recorder.log(
-                            obs=state.obs, action=action, reward=state.reward,
+                            obs=logged_obs, action=action, reward=state.reward,
                             done=state.done, ee_target=target, sim_time=data.time,
                         )
 

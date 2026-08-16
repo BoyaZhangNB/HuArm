@@ -348,8 +348,6 @@ class ErhuEnv(MjxEnv):
         qpos, qvel = data.qpos, data.qvel
 
         sound_box_rel = self._relative(data.xpos[self._sound_box_id], self._base_id, data)
-        string_d_rel = self._relative(data.xpos[self._string_d_id], self._base_id, data)
-        string_a_rel = self._relative(data.xpos[self._string_a_id], self._base_id, data)
 
         frog, tip, mid, _ = self._bow_geometry(data)
         frog_rel = self._relative(frog, self._erhu_root_id, data)
@@ -367,7 +365,7 @@ class ErhuEnv(MjxEnv):
 
         obs = jp.concatenate([
             qpos, qvel,
-            sound_box_rel, string_d_rel, string_a_rel,
+            sound_box_rel,
             rel_quat, frog_rel, tip_rel, mid_rel,
             force,
             jp.reshape(desired_velocity, (1,)), jp.reshape(desired_pressure, (1,)),
