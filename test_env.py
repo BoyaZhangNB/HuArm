@@ -9,7 +9,7 @@ from mujoco import mjx
 import jax
 import jax.numpy as jp
 from envs.erhu_env import ErhuEnv
-from envs.utils_envs import init_huarm, jacobian_ik, joint_to_actuator_id
+from envs.utils_envs import joint_to_actuator_id
 
 from utils import print_jp_dict, MetricsLogger
 from agents.obs_normalizer import init_running_norm, update_running_norm, normalize_obs
@@ -18,37 +18,6 @@ from agents.obs_normalizer import init_running_norm, update_running_norm, normal
 # single 3D position teleop sends -- teleop only ever specifies where the
 # end effector should be, not individual joint angles.
 ARM_JOINT_NAMES = ("joint1", "joint2", "joint5", "joint3", "joint4")
-
-
-def get_desired_position(t):
-    """
-    Computes a target trajectory for the bow over time.
-    Simulates standard back-and-forth bowing motion along the Y-axis,
-    with a slight downward press along the Z-axis.
-    """
-    base_x = 0.38
-    base_y = 0.30
-    base_z = 0.58
-
-    y_offset = 0.15 * np.sin(2 * np.pi * 0.5 * t)
-    z_offset = -0.015 * np.abs(np.sin(2 * np.pi * 0.5 * t))
-
-    return np.array([base_x, base_y + y_offset, base_z + z_offset])
-
-
-def compute_arm_ctrl_for_target(model, ik_data, target_pos, joint_names,
-                                 body_name="bow_frog", local_offset=None, max_iters=20):
-    """
-    IK solver for positioning a point on `body_name` (its origin, unless
-    local_offset is given) with arm joint actuation.
-    """
-    if local_offset is None:
-        local_offset = np.zeros(3)
-    body_points = [(body_name, local_offset, 1.0)]
-    jacobian_ik(model, ik_data, body_points, target_pos, list(joint_names), max_iters=max_iters)
-    qpos_idxs = [model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn)]
-                 for jn in joint_names]
-    return {jn: ik_data.qpos[qi] for jn, qi in zip(joint_names, qpos_idxs)}
 
 # --- TEMPORARY: lets you trigger env.reset() by pressing Enter in the
 # terminal while the viewer loop is running. Remove once no longer needed.
@@ -61,28 +30,11 @@ def _listen_for_reset_key(reset_event):
         reset_event.set()
 
 
-def print_all_contact(model, data):
-    print("\n--- Theoretically Allowed Contact Pairs ---")
-    for i in range(model.ngeom):
-        for j in range(i + 1, model.ngeom):
-            # Exclude geoms on the same body if parent/child contact is disabled
-            if model.geom_bodyid[i] == model.geom_bodyid[j]:
-                continue
-                
-            type_i, aff_i = model.geom_contype[i], model.geom_conaffinity[i]
-            type_j, aff_j = model.geom_contype[j], model.geom_conaffinity[j]
-            
-            # Check bitmask condition
-            if (type_i & aff_j) or (type_j & aff_i):
-                name_i = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, i) or f"geom_{i}"
-                name_j = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, j) or f"geom_{j}"
-                print(f"{name_i} <---> {name_j}")
-
 def main(xml_path):
     print(f"Using MuJoCo Version: {mujoco.__version__}")
 
-    env = ErhuEnv(episode_time_limit=1000, max_ctrl_delta=0.05, f_safe=3, f_max=30, dr_pool_seed=420)
-    state = env.reset(jax.random.PRNGKey(20))
+    env = ErhuEnv(episode_time_limit=1000, max_ctrl_delta=0.05, f_safe=3, f_max=30, dr_pool_size=128, dr_pool_seed=420)
+    state = env.reset(jax.random.PRNGKey(0))
     print(f"Environment reset.")
     model = env.mj_model
     data = mjx.get_data(model, state.pipeline_state)
@@ -172,7 +124,7 @@ def main(xml_path):
                 if data.time >= next_tension_print:
                     next_tension_print = data.time + log_print_interval
                     # print_jp_dict(state.metrics)
-                    metrics_logger.log(data.time, state.metrics["reward_terms"])
+                    metrics_logger.log(data.time, state.metrics)
 
         except KeyboardInterrupt:
             print("\nKeyboard interrupt received. Exiting.")

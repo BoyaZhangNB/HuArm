@@ -113,6 +113,8 @@ class ErhuEnv(MjxEnv):
         string_tolerance: float = 0.15,
         forbidden_margin: float = 0.1,
         contact_duration_scale: float = 20.0, # 20 steps (0.8s) give you reward of 0.76, 40 steps give you reward of 0.96, 60 steps give you reward of 0.99.
+        contact_force_ema_alpha: float = 0.2, # low-pass factor on bow_a_force (per RL step, 25Hz); see `_step_kinematics`.
+        contact_steps_decay: float = 5.0, # steps of `contact_steps` lost per non-contact step, instead of an instant reset to 0.
         velocity_kernel_scale: float = 20.0, # corresopnd to accpetable error of 0.05 [m/s].
         pressure_kernel_scale: float = 1.0, # corresopnd to accpetable error of 1 [N].
         reward_weights: Dict[str, float] = None,
@@ -147,6 +149,8 @@ class ErhuEnv(MjxEnv):
         self.string_tolerance = string_tolerance
         self.forbidden_margin = forbidden_margin
         self.contact_duration_scale = contact_duration_scale
+        self.contact_force_ema_alpha = contact_force_ema_alpha
+        self.contact_steps_decay = contact_steps_decay
         self.velocity_kernel_scale = velocity_kernel_scale
         self.pressure_kernel_scale = pressure_kernel_scale
 
@@ -274,13 +278,7 @@ class ErhuEnv(MjxEnv):
 
     def _contact_force_mags(self, data: mjx.Data, model: mjx.Model) -> jax.Array:
         """Per-contact-slot linear contact force magnitude, shape (ncon,).
-
-        Unlike the `bow_arm_contact` force sensor (which only reports force
-        transmitted through the bow's mounting site), this reads the actual
-        constraint force resolved for every active contact in the scene, so
-        it reflects the true maximum contact force regardless of where it
-        occurs. Inactive contact slots come back as zero force.
-
+        
         `model` should be this episode's effective (possibly randomized)
         model -- see `_effective_model` -- not necessarily `self.mjx_model`.
         """
@@ -325,6 +323,7 @@ class ErhuEnv(MjxEnv):
             "force_history": jp.zeros((self.n_stack, self._force_dim)),
             "prev_bow_mid": mid,
             "contact_steps": jp.asarray(0.0),
+            "bow_a_force_ema": jp.asarray(0.0),
         }
         obs = self._get_obs(data, info, model)
         reward, done = jp.asarray(0.0, dtype=jp.float32), jp.asarray(0.0, dtype=jp.float32)
@@ -336,6 +335,7 @@ class ErhuEnv(MjxEnv):
             "force_mag": jp.asarray(0.0, dtype=jp.float32),
             "max_contact_force": jp.asarray(0.0, dtype=jp.float32),
             "bow_a_force": jp.asarray(0.0, dtype=jp.float32),
+            "bow_a_force_ema": jp.asarray(0.0, dtype=jp.float32),
             "velocity_error": jp.asarray(0.0, dtype=jp.float32),
             "pressure_error": jp.asarray(0.0, dtype=jp.float32),
             "contact": jp.asarray(0.0, dtype=jp.float32),
@@ -401,8 +401,19 @@ class ErhuEnv(MjxEnv):
         lateral_vel = jp.dot(bow_vel_local, self._lateral_axis_local)
 
         # touching, min_dist = self._bow_string_contact(data)
-        touching = jp.where(bow_a_force > 0.0, jp.asarray(1.0), jp.asarray(0.0))
-        contact_steps = jp.where(touching, info["contact_steps"] + 1.0, 0.0)
+
+        bow_a_force_ema = (
+            self.contact_force_ema_alpha * bow_a_force
+            + (1.0 - self.contact_force_ema_alpha) * info["bow_a_force_ema"]
+        )
+        touching = jp.where(bow_a_force_ema > 1e-3, jp.asarray(1.0), jp.asarray(0.0))
+        # Losing contact for a single step now costs `contact_steps_decay`
+        # steps of progress instead of the whole accumulated streak.
+        contact_steps = jp.where(
+            touching,
+            info["contact_steps"] + 1.0,
+            jp.maximum(info["contact_steps"] - self.contact_steps_decay, 0.0),
+        )
 
         desired_velocity, desired_pressure = desired_velocity_and_pressure(model, data)
         forbidden_dist = forbidden_area_distance(model, data)
@@ -412,6 +423,7 @@ class ErhuEnv(MjxEnv):
             force_mag=force_mag,
             max_contact_force=max_contact_force,
             bow_a_force=bow_a_force,
+            bow_a_force_ema=bow_a_force_ema,
             mid=mid,
             bow_axis=bow_axis,
             lateral_vel=lateral_vel,
@@ -433,8 +445,9 @@ class ErhuEnv(MjxEnv):
         return 1.0 / (1.0 + jp.square(err))
 
     def _reward_pressure(self, k: Dict[str, jax.Array]) -> jax.Array:
-        """Tracking accuracy: bow-hair/A-string contact force vs. desired pressure."""
-        err = (k["bow_a_force"] - k["desired_pressure"]) * self.pressure_kernel_scale
+        """Tracking accuracy: bow-hair/A-string contact force (low-pass
+        filtered, see `_step_kinematics`) vs. desired pressure."""
+        err = (k["bow_a_force_ema"] - k["desired_pressure"]) * self.pressure_kernel_scale
         return 1.0 / (1.0 + jp.square(err))
 
     def _reward_contact_duration(self, k: Dict[str, jax.Array]) -> jax.Array:
@@ -552,6 +565,7 @@ class ErhuEnv(MjxEnv):
         )
         info["prev_bow_mid"] = k["mid"]
         info["contact_steps"] = k["contact_steps"]
+        info["bow_a_force_ema"] = k["bow_a_force_ema"]
 
         obs = self._get_obs(data, info, model)
         metrics = {
@@ -559,8 +573,10 @@ class ErhuEnv(MjxEnv):
             "force_mag": k["force_mag"],
             "max_contact_force": k["max_contact_force"],
             "bow_a_force": k["bow_a_force"],
+            "bow_a_force_ema": k["bow_a_force_ema"],
+            "bow_velocity": k["lateral_vel"],
             "velocity_error": k["lateral_vel"] - k["desired_velocity"],
-            "pressure_error": k["bow_a_force"] - k["desired_pressure"],
+            "pressure_error": k["bow_a_force_ema"] - k["desired_pressure"],
             "contact": k["touching"].astype(jp.float32),
             "reward_terms": terms,
         }

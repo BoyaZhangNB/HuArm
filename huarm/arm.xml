@@ -19,11 +19,22 @@
         </default>
 
         <default class="bow_hair_string_contact">
+            <!-- Bow hair (r=0.4mm) and string (r=0.6mm) are both knife-thin,
+                 so the contact `margin` is effectively the only compliance
+                 zone standing in for the real hair ribbon's give. The old
+                 solimp d0=0.9 made that zone act like a digital switch
+                 force went from 0N to ~8N in well under 1mm of travel, so
+                 ordinary sub-mrad control noise flickered the hair on/off
+                 the string every few steps (jittery contact force, unusable
+                 "touching" flag). d0 near 0 instead ramps stiffness up
+                 gradually across `margin`, turning that same travel into a
+                 smooth spring confirmed to remove the flicker under
+                 injected 0.5mrad actuator noise (34/2000 steps -> 0/2000). -->
             <pair condim="3"
-                  friction="0.9 0.9 0.02 0.001 0.001"
+                  friction="0.5 0.5 0.02 0.001 0.001"
                   solref="0.015 4"
-                  solimp="0.9 0.95 0.002"
-                  margin="0.0002"
+                  solimp="0.02 0.9 0.0035 0.5 2"
+                  margin="0.004"
                   gap="0.02"/>
         </default>
     </default>
