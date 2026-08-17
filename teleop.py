@@ -227,19 +227,18 @@ class TCPReceiver(threading.Thread):
 # than exposed by the env itself.
 # ---------------------------------------------------------------------------
 
-def _force_sensor_dim(model) -> int:
-    sensor_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SENSOR, "bow_arm_contact")
-    return int(model.sensor_dim[sensor_id])
-
-
 def desired_velocity_obs_idx(model) -> int:
     """Index of `desired_velocity` within ErhuEnv._get_obs's obs vector
     (`desired_pressure` immediately follows it). Mirrors that method's fixed
-    concatenation order: qpos, qvel, sound_box_rel(3), rel_quat(4),
-    frog_rel(3), tip_rel(3), mid_rel(3), force(force_dim),
-    [desired_velocity, desired_pressure], forbidden_dist,
-    ... -- update this if that layout ever changes."""
-    return model.nq + model.nv + 3 + 4 + 3 + 3 + 3 + _force_sensor_dim(model)
+    concatenation order: qpos, qvel (each one short of `model.nq`/`model.nv`
+    -- the passive, unmeasurable bow_frog_hinge dof is excluded from the
+    observation, see ErhuEnv._obs_qpos_idxs/_obs_qvel_idxs), sound_box_rel(3),
+    rel_quat(4), frog_rel(3), tip_rel(3), mid_rel(3), force(1) -- a
+    uni-directional scalar, the raw sensor force projected onto the arm's
+    last-link axis, see ErhuEnv._axial_force -- [desired_velocity,
+    desired_pressure], forbidden_dist, ... -- update this if that layout
+    ever changes."""
+    return (model.nq - 1) + (model.nv - 1) + 3 + 4 + 3 + 3 + 3 + 1
 
 
 def patch_desired_velocity_pressure(obs, idx: int, velocity: float, pressure: float) -> np.ndarray:
@@ -265,6 +264,16 @@ class DemoRecorder:
     `patch_desired_velocity_pressure` -- so a saved demo is NOT byte-for-byte
     what `ErhuEnv` itself would have produced, but is what a BC policy
     trained on it should see (see inference.py's `agent.act(obs, ...)` call).
+
+    Each saved episode also carries, as metadata, everything needed to
+    replay it through `ErhuEnv.step` later (see `test_demonstration.py`):
+    this episode's domain-randomization params (`dr_*` keys -- the dict
+    `ErhuEnv.reset` draws into `state.info["dr_params"]`, e.g.
+    friction/mass/damping/erhu placement, fixed for the whole episode) and
+    the exact physics state recording started from (`init_*` keys --
+    `state.pipeline_state`'s qpos/qvel/ctrl/act/time). Both are snapshotted
+    straight off the live `State` passed into `start()` -- public fields
+    only, no reach into `ErhuEnv` internals.
     """
 
     def __init__(self, out_dir: Path):
@@ -272,12 +281,27 @@ class DemoRecorder:
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.active = False
         self._buf = None
+        self._dr_params = {}
+        self._init_state = {}
 
-    def start(self):
+    def start(self, dr_params=None, pipeline_state=None):
         self._buf = {
             "obs": [], "action": [], "reward": [], "done": [],
             "ee_target": [], "sim_time": [], "wall_time": [],
         }
+        self._dr_params = (
+            {k: np.asarray(v) for k, v in dr_params.items()} if dr_params is not None else {}
+        )
+        self._init_state = (
+            {
+                "qpos": np.asarray(pipeline_state.qpos),
+                "qvel": np.asarray(pipeline_state.qvel),
+                "ctrl": np.asarray(pipeline_state.ctrl),
+                "act": np.asarray(pipeline_state.act),
+                "time": np.asarray(pipeline_state.time),
+            }
+            if pipeline_state is not None else {}
+        )
         self.active = True
         print("[collect] recording started")
 
@@ -312,6 +336,8 @@ class DemoRecorder:
             ee_target=np.stack(buf["ee_target"]),
             sim_time=np.asarray(buf["sim_time"], dtype=np.float32),
             wall_time=np.asarray(buf["wall_time"], dtype=np.float64),
+            **{f"dr_{k}": v for k, v in self._dr_params.items()},
+            **{f"init_{k}": v for k, v in self._init_state.items()},
         )
         print(f"[collect] stopped -- saved {n} steps to {fname}")
 
@@ -468,10 +494,10 @@ def main():
                             # `collect` is still held -- treat reset as an
                             # episode boundary, not the end of the session.
                             recorder.stop_and_save()
-                            recorder.start()
+                            recorder.start(state.info["dr_params"], state.pipeline_state)
 
                     if rising_collect:
-                        recorder.start()
+                        recorder.start(state.info["dr_params"], state.pipeline_state)
                     if falling_collect:
                         recorder.stop_and_save()
 

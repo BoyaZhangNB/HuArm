@@ -12,8 +12,10 @@ MUJOCO_LOG.TXT
 # models
 checkpoints/
 Archive.zip
+metrics.png
 
-demonstrations/
+*.npz
+demo*.png
 
 # Distribution / packaging
 .claude/

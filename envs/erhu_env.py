@@ -196,9 +196,15 @@ class ErhuEnv(MjxEnv):
         self._bow_hair_frog_site = sid("bow_hair_frog_site")
         self._bow_hair_tip_site = sid("bow_hair_tip_site")
 
+        self._bow_frog_site_id = sid("bow_frog_site")
+        self._end_effector_id = bid("end_effector")
+
         sensor_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_SENSOR, "bow_arm_contact")
         self._force_adr = int(m.sensor_adr[sensor_id])
-        self._force_dim = int(m.sensor_dim[sensor_id])
+        self._force_raw_dim = int(m.sensor_dim[sensor_id])
+        # obs/force_history carry the sensor projected down to a scalar --
+        # see `_axial_force`.
+        self._force_dim = 1
 
         # Number of contact slots mjx allocates per step -- static (fixed by
         # the model), so it's safe to unroll a Python loop over it inside
@@ -216,6 +222,23 @@ class ErhuEnv(MjxEnv):
         self._sound_box_radius = float(m.geom_size[self._sound_box_geom_id][0])
         self._ctrl_lo = self.mjx_model.actuator_ctrlrange[:, 0]
         self._ctrl_hi = self.mjx_model.actuator_ctrlrange[:, 1]
+
+        # The bow-frog hinge is a passive, unsprung joint (see
+        # `utils_envs.frog_hinge_gravity`) with no real-world sensor -- at
+        # inference time there is nothing that measures or tracks it, so its
+        # qpos/qvel are excluded from the observation (they're still
+        # simulated and part of the physics state, just not observed). These
+        # index arrays gather every *other* dof, computed once here instead
+        # of on every `_get_obs` call.
+        frog_jid = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, "bow_frog_hinge")
+        frog_qpos_adr = int(m.jnt_qposadr[frog_jid])
+        frog_dof_adr = int(m.jnt_dofadr[frog_jid])
+        self._obs_qpos_idxs = jp.asarray(
+            [i for i in range(m.nq) if i != frog_qpos_adr]
+        )
+        self._obs_qvel_idxs = jp.asarray(
+            [i for i in range(m.nv) if i != frog_dof_adr]
+        )
 
         # The erhu's local left/right axis, expressed in the erhu root frame.
         self._lateral_axis_local = jp.array([1.0, 0.0, 0.0])
@@ -275,6 +298,24 @@ class ErhuEnv(MjxEnv):
         touching = jp.any(active)
         min_dist = jp.min(jp.where(active, dist, jp.inf))
         return touching, min_dist
+
+    def _axial_force(self, data: mjx.Data) -> jax.Array:
+        """Scalar, signed reaction force at the bow-frog joint, projected
+        onto the arm's last-link axis (the direction from joint4/end_effector
+        along the final rigid link, i.e. the arm's reach direction) --
+        rather than the raw 3-axis sensor vector.
+
+        The `bow_arm_contact` force sensor reports its 3-vector in the
+        `bow_frog_site` local frame, so it's rotated to world before being
+        projected onto that axis.
+        """
+        force_local = data.sensordata[self._force_adr:self._force_adr + self._force_raw_dim]
+        force_world = data.site_xmat[self._bow_frog_site_id].reshape(3, 3) @ force_local
+        # end_effector shares joint4_body's orientation (zero relative
+        # rotation between them); the last link runs from joint4_body to
+        # end_effector along that frame's local -x.
+        axis_world = -data.xmat[self._end_effector_id].reshape(3, 3)[:, 0]
+        return jp.dot(force_world, axis_world)
 
     def _contact_force_mags(self, data: mjx.Data, model: mjx.Model) -> jax.Array:
         """Per-contact-slot linear contact force magnitude, shape (ncon,).
@@ -345,7 +386,10 @@ class ErhuEnv(MjxEnv):
 
     def _get_obs(self, data: mjx.Data, info: Dict[str, Any], model: mjx.Model = None) -> jax.Array:
         model = self.mjx_model if model is None else model
-        qpos, qvel = data.qpos, data.qvel
+        # Excludes the passive, unmeasurable bow_frog_hinge dof -- see the
+        # `_obs_qpos_idxs`/`_obs_qvel_idxs` comment in __init__.
+        qpos = data.qpos[self._obs_qpos_idxs]
+        qvel = data.qvel[self._obs_qvel_idxs]
 
         sound_box_rel = self._relative(data.xpos[self._sound_box_id], self._base_id, data)
 
@@ -358,7 +402,7 @@ class ErhuEnv(MjxEnv):
         erhu_quat = _mat_to_quat(data.xmat[self._erhu_root_id].reshape(3, 3))
         rel_quat = _quat_mul(_quat_conj(erhu_quat), bow_quat)
 
-        force = data.sensordata[self._force_adr:self._force_adr + self._force_dim]
+        force = self._axial_force(data)
 
         desired_velocity, desired_pressure = desired_velocity_and_pressure(model, data)
         forbidden_dist = forbidden_area_distance(model, data)
@@ -367,7 +411,7 @@ class ErhuEnv(MjxEnv):
             qpos, qvel,
             sound_box_rel,
             rel_quat, frog_rel, tip_rel, mid_rel,
-            force,
+            jp.reshape(force, (1,)),
             jp.reshape(desired_velocity, (1,)), jp.reshape(desired_pressure, (1,)),
             jp.reshape(forbidden_dist, (1,)),
             info["action_history"].reshape(-1),
@@ -381,9 +425,9 @@ class ErhuEnv(MjxEnv):
     # contained.
     # ------------------------------------------------------------------
     def _step_kinematics(self, data: mjx.Data, info: Dict[str, Any], model: mjx.Model) -> Dict[str, jax.Array]:
-        # Sensor force
-        force = data.sensordata[self._force_adr:self._force_adr + self._force_dim]
-        force_mag = jp.linalg.norm(force)
+        # Sensor force, projected to a uni-directional scalar -- see `_axial_force`.
+        force = self._axial_force(data)
+        force_mag = jp.abs(force)
         # Both are magnitudes
         max_contact_force = self._max_contact_force(data, model)
         bow_a_force = self._bow_hair_a_string_force(data, model)
@@ -559,7 +603,7 @@ class ErhuEnv(MjxEnv):
             [info["action_history"][1:], action[None, :]], axis=0
         )
         info["force_history"] = jp.concatenate(
-            [info["force_history"][1:], k["force"][None, :]], axis=0
+            [info["force_history"][1:], jp.reshape(k["force"], (1, 1))], axis=0
         )
         info["prev_bow_mid"] = k["mid"]
         info["contact_steps"] = k["contact_steps"]
