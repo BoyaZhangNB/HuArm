@@ -114,9 +114,10 @@ class ErhuEnv(MjxEnv):
         forbidden_margin: float = 0.1,
         contact_duration_scale: float = 20.0, # 20 steps (0.8s) give you reward of 0.76, 40 steps give you reward of 0.96, 60 steps give you reward of 0.99.
         contact_force_ema_alpha: float = 0.2, # low-pass factor on bow_a_force (per RL step, 25Hz); see `_step_kinematics`.
+        velocity_ema_alpha: float = 0.3, # low-pass factor on lateral_vel (per RL step, 25Hz); see `_step_kinematics`.
         contact_steps_decay: float = 5.0, # steps of `contact_steps` lost per non-contact step, instead of an instant reset to 0.
-        velocity_kernel_scale: float = 20.0, # corresopnd to accpetable error of 0.05 [m/s].
-        pressure_kernel_scale: float = 1.0, # corresopnd to accpetable error of 1 [N].
+        velocity_kernel_scale: float = 40.0, # corresopnd to accpetable error of 0.025 [m/s].
+        pressure_kernel_scale: float = 10.0, # corresopnd to accpetable error of 0.1 [N].
         reward_weights: Dict[str, float] = None,
         dr_pool_size: int = 1024,
         dr_pool_seed: int = 0,
@@ -150,6 +151,7 @@ class ErhuEnv(MjxEnv):
         self.forbidden_margin = forbidden_margin
         self.contact_duration_scale = contact_duration_scale
         self.contact_force_ema_alpha = contact_force_ema_alpha
+        self.velocity_ema_alpha = velocity_ema_alpha
         self.contact_steps_decay = contact_steps_decay
         self.velocity_kernel_scale = velocity_kernel_scale
         self.pressure_kernel_scale = pressure_kernel_scale
@@ -365,6 +367,7 @@ class ErhuEnv(MjxEnv):
             "prev_bow_mid": mid,
             "contact_steps": jp.asarray(0.0),
             "bow_a_force_ema": jp.asarray(0.0),
+            "bow_vel_ema": jp.asarray(0.0),
         }
         obs = self._get_obs(data, info, model)
         reward, done = jp.asarray(0.0, dtype=jp.float32), jp.asarray(0.0, dtype=jp.float32)
@@ -377,6 +380,7 @@ class ErhuEnv(MjxEnv):
             "max_contact_force": jp.asarray(0.0, dtype=jp.float32),
             "bow_a_force": jp.asarray(0.0, dtype=jp.float32),
             "bow_a_force_ema": jp.asarray(0.0, dtype=jp.float32),
+            "bow_vel_ema": jp.asarray(0.0, dtype=jp.float32),
             "velocity_error": jp.asarray(0.0, dtype=jp.float32),
             "pressure_error": jp.asarray(0.0, dtype=jp.float32),
             "contact": jp.asarray(0.0, dtype=jp.float32),
@@ -448,6 +452,14 @@ class ErhuEnv(MjxEnv):
             self.contact_force_ema_alpha * bow_a_force
             + (1.0 - self.contact_force_ema_alpha) * info["bow_a_force_ema"]
         )
+        # Low-pass the (noisy, finite-difference) bow velocity the same way
+        # bow_a_force is smoothed above -- consumers that want a clean
+        # "actual velocity" signal (e.g. teleop.py's obs patching) should
+        # use this instead of the raw per-step lateral_vel.
+        bow_vel_ema = (
+            self.velocity_ema_alpha * lateral_vel
+            + (1.0 - self.velocity_ema_alpha) * info["bow_vel_ema"]
+        )
         touching = jp.where(bow_a_force_ema > 1e-3, jp.asarray(1.0), jp.asarray(0.0))
         # Losing contact for a single step now costs `contact_steps_decay`
         # steps of progress instead of the whole accumulated streak.
@@ -469,6 +481,7 @@ class ErhuEnv(MjxEnv):
             mid=mid,
             bow_axis=bow_axis,
             lateral_vel=lateral_vel,
+            bow_vel_ema=bow_vel_ema,
             touching=touching,
             contact_steps=contact_steps,
             desired_velocity=desired_velocity,
@@ -608,6 +621,7 @@ class ErhuEnv(MjxEnv):
         info["prev_bow_mid"] = k["mid"]
         info["contact_steps"] = k["contact_steps"]
         info["bow_a_force_ema"] = k["bow_a_force_ema"]
+        info["bow_vel_ema"] = k["bow_vel_ema"]
 
         obs = self._get_obs(data, info, model)
         metrics = {
@@ -617,6 +631,7 @@ class ErhuEnv(MjxEnv):
             "bow_a_force": k["bow_a_force"],
             "bow_a_force_ema": k["bow_a_force_ema"],
             "bow_velocity": k["lateral_vel"],
+            "bow_vel_ema": k["bow_vel_ema"],
             "velocity_error": k["lateral_vel"] - k["desired_velocity"],
             "pressure_error": k["bow_a_force_ema"] - k["desired_pressure"],
             "contact": k["touching"].astype(jp.float32),

@@ -33,13 +33,14 @@ def main():
         return
 
     deleted, kept = 0, 0
+    demo_total_len = 0
     for path in paths:
         try:
             n = demo_length(path)
         except Exception as e:
             print(f"[skip] {os.path.basename(path)}: could not read ({e})")
             continue
-
+        
         if n < args.min_len:
             action = "[dry-run] would delete" if args.dry_run else "[delete]"
             print(f"{action} {os.path.basename(path)} (len={n})")
@@ -48,9 +49,11 @@ def main():
             deleted += 1
         else:
             kept += 1
+            demo_total_len += n
 
     print(f"\n{deleted} demo(s) {'would be ' if args.dry_run else ''}deleted, {kept} kept "
           f"(threshold: len >= {args.min_len}).")
+    print(f"Total timesteps in accepted demos: {demo_total_len}")
 
 
 if __name__ == "__main__":
