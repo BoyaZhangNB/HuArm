@@ -417,7 +417,7 @@ def main():
 
     print(f"Using MuJoCo Version: {mujoco.__version__}")
 
-    env = ErhuEnv(episode_time_limit=args.episode_time_limit, dr_pool_size=10)
+    env = ErhuEnv(episode_time_limit=args.episode_time_limit, dr_pool_size=128)
     _reset = jax.jit(env.reset)
     _step = jax.jit(env.step)
 
@@ -490,9 +490,17 @@ def main():
                         awaiting_reset = False
                         print(f"\n[reset] new episode, EE origin = {ee_origin}, "
                               f"pitch origin = {pitch_origin:.4f} rad")
-                        if recorder.active:
+                        if collect:
                             # `collect` is still held -- treat reset as an
                             # episode boundary, not the end of the session.
+                            # Checked against the level, not `recorder.active`:
+                            # env-internal termination (state.done, below)
+                            # already auto-saves and deactivates the recorder,
+                            # so relying on `.active` here would silently skip
+                            # starting the next episode whenever a reset
+                            # follows an auto-saved termination, stranding
+                            # `collect` in a "held but nothing recording"
+                            # limbo that a later collect=false can't save.
                             recorder.stop_and_save()
                             recorder.start(state.info["dr_params"], state.pipeline_state)
 
@@ -531,10 +539,13 @@ def main():
                         # Log obs with desired_velocity/desired_pressure
                         # replaced by the expert's actual values this step
                         # (see the BC obs patching block above), not
-                        # ErhuEnv's placeholder schedule.
+                        # ErhuEnv's placeholder schedule. Both are low-pass
+                        # filtered (ErhuEnv._step_kinematics EMAs) rather than
+                        # the raw per-step values, so the logged demo isn't
+                        # noisier than what a trained policy would see.
                         logged_obs = patch_desired_velocity_pressure(
                             state.obs, desired_vp_idx,
-                            state.metrics["bow_velocity"], state.metrics["bow_a_force_ema"],
+                            state.metrics["bow_vel_ema"], state.metrics["bow_a_force_ema"],
                         )
                         recorder.log(
                             obs=logged_obs, action=action, reward=state.reward,
