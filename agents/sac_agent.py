@@ -197,6 +197,74 @@ class SACAgent(Agent):
             "obs_norm": init_running_norm(self.obs_size),
         }
 
+    def seed_buffer_overrides(
+        self,
+        demo_obs,
+        demo_action,
+        demo_reward,
+        demo_next_obs,
+        demo_done,
+        obs_norm: RunningNorm | None = None,
+    ) -> Dict[str, Any]:
+        """Build `train_state` overrides that pre-load demonstration
+        transitions (demonstrations/demo_buffer.py's `load_demo_transitions`)
+        into the replay ring buffer, for train.py's `--demo-dir` flag.
+
+        This is reinforcement learning *with* prior data, not behavior
+        cloning: nothing here touches actor/critic params. The demo
+        transitions just become the oldest entries already sitting in the
+        buffer before training starts, so `update()` samples them in the
+        same minibatches as every rollout transition collected afterwards
+        (see its `grad_step`'s `sample_idx`) -- early gradient steps get
+        real expert `(obs, action, reward, next_obs, done)` tuples to
+        critic-fit against instead of only random-policy rollouts, and
+        training then proceeds completely normally (nothing in
+        training_interface.py or `update()` needs to change).
+
+        `obs_norm`, if given, is the running obs-normalization estimate to
+        fold the demo observations into (e.g. one already restored from a
+        `--bc-checkpoint`); defaults to a fresh `init_running_norm` otherwise.
+        """
+        capacity = self.buffer_capacity
+        n = demo_obs.shape[0]
+        if n > capacity:
+            raise ValueError(
+                f"{n} demo transitions exceed buffer_capacity={capacity}; raise "
+                "buffer_capacity in configs/*.yaml's `agent` block or trim the demo set."
+            )
+
+        idx = jp.arange(n)
+        buf_obs = jp.zeros((capacity, self.obs_size), dtype=jp.float32).at[idx].set(
+            jp.asarray(demo_obs, dtype=jp.float32)
+        )
+        buf_action = jp.zeros((capacity, self.action_size), dtype=jp.float32).at[idx].set(
+            jp.asarray(demo_action, dtype=jp.float32)
+        )
+        buf_reward = jp.zeros((capacity,), dtype=jp.float32).at[idx].set(
+            jp.asarray(demo_reward, dtype=jp.float32)
+        )
+        buf_next_obs = jp.zeros((capacity, self.obs_size), dtype=jp.float32).at[idx].set(
+            jp.asarray(demo_next_obs, dtype=jp.float32)
+        )
+        buf_done = jp.zeros((capacity,), dtype=jp.float32).at[idx].set(
+            jp.asarray(demo_done, dtype=jp.float32)
+        )
+
+        if obs_norm is None:
+            obs_norm = init_running_norm(self.obs_size)
+        obs_norm = update_running_norm(obs_norm, jp.asarray(demo_obs, dtype=jp.float32))
+
+        return {
+            "buf_obs": buf_obs,
+            "buf_action": buf_action,
+            "buf_reward": buf_reward,
+            "buf_next_obs": buf_next_obs,
+            "buf_done": buf_done,
+            "write_ptr": jp.asarray(n % capacity, dtype=jp.int32),
+            "buffer_size": jp.asarray(n, dtype=jp.int32),
+            "obs_norm": obs_norm,
+        }
+
     def act(
         self,
         train_state: Any,

@@ -18,6 +18,7 @@ metrics.png
 demo*.png
 
 # Distribution / packaging
+wake.py
 .claude/
 .Python
 build/

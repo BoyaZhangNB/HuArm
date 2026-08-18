@@ -11,6 +11,7 @@ from training_interface import train
 from agents.obs_normalizer import RunningNorm
 from agents.ppo_agent import PPOAgent
 from agents.sac_agent import SACAgent
+from demonstrations.demo_buffer import load_demo_transitions
 from envs.erhu_env import ErhuEnv
 from utils import MetricsLogger, print_jp_dict, make_env
 
@@ -33,6 +34,16 @@ def main():
              "warm-start the policy from, instead of agent.init()'s random weights. Must "
              "have been trained with --algo matching this config's `algo` (param shapes are "
              "restored structurally against a freshly-init'd agent of that type).",
+    )
+    parser.add_argument(
+        "--demo-dir", nargs="?", const="demonstrations", default=None,
+        help="Seed SACAgent's replay buffer with teleop.py demonstrations (demo_*.npz files "
+             "under this directory, default 'demonstrations' if flag given with no value) "
+             "before training starts, instead of/alongside --bc-checkpoint's supervised "
+             "warm start: this is RL *with* prior data rather than imitation -- the demo "
+             "(obs, action, reward, next_obs, done) transitions just become the oldest "
+             "entries already in the buffer, and training then proceeds completely normally "
+             "(see agents/sac_agent.py's `seed_buffer_overrides`). Only valid with `algo: sac`.",
     )
     args = parser.parse_args()
     cfg = load_config(args.config)
@@ -78,6 +89,38 @@ def main():
         else:
             print(f"[WARNING] {bc_obs_norm_path} not found; keeping untrained obs-normalization stats.")
         print(f"Warm-starting {algo} policy from BC checkpoint: {bc_path}")
+
+    # 2c. Optionally seed SACAgent's replay buffer with teleop.py
+    # demonstrations, so off-policy training starts with real expert
+    # transitions already in the buffer alongside whatever the (still
+    # randomly-initialized, unless --bc-checkpoint above was also given)
+    # policy collects itself -- see agents/sac_agent.py's
+    # `seed_buffer_overrides` module-level docstring for why this is RL
+    # with prior data rather than a second flavor of BC.
+    if args.demo_dir:
+        if algo != "sac":
+            raise ValueError(
+                f"--demo-dir seeds SACAgent's replay buffer and doesn't apply to algo={algo!r} "
+                "(no replay buffer to seed); drop --demo-dir or switch to `algo: sac`."
+            )
+        demo = load_demo_transitions(args.demo_dir)
+        assert demo.obs.shape[-1] == env.observation_size, (
+            f"demo obs dim {demo.obs.shape[-1]} != ErhuEnv.observation_size "
+            f"{env.observation_size} -- demos under {args.demo_dir} were recorded against a "
+            "different obs layout than the current ErhuEnv."
+        )
+        assert demo.action.shape[-1] == env.action_size, (
+            f"demo action dim {demo.action.shape[-1]} != ErhuEnv.action_size {env.action_size}."
+        )
+        demo_overrides = agent.seed_buffer_overrides(
+            demo.obs, demo.action, demo.reward, demo.next_obs, demo.done,
+            obs_norm=(init_overrides or {}).get("obs_norm"),
+        )
+        init_overrides = {**(init_overrides or {}), **demo_overrides}
+        print(
+            f"Seeded SAC replay buffer with {demo.obs.shape[0]} demo transitions "
+            f"from {args.demo_dir}"
+        )
 
     # 3. Train. Swapping `agent` swaps the whole algorithm; swapping the
     #    env class swaps the whole task/robot. Neither affects the other.
