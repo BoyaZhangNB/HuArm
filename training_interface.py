@@ -193,12 +193,23 @@ def train(
     eval_interval: int,
     eval_episodes: int,
     log_fn: Callable[[int, Dict[str, jax.Array]], None] = lambda i, m: None,
+    init_train_state_overrides: Dict[str, Any] = None,
 ) -> Any:
     """Generic train loop: rollout -> update -> repeat. Swap `agent` to
-    swap the entire learning algorithm; nothing else here changes."""
+    swap the entire learning algorithm; nothing else here changes.
+
+    `init_train_state_overrides`, if given, is shallow-merged onto
+    `agent.init()`'s train_state before the first rollout -- e.g. {"params":
+    ...} / {"actor_params": ...} plus {"obs_norm": ...} to warm-start from a
+    bc/train_bc.py checkpoint (see train.py's `--bc-checkpoint`). Kept
+    agent-agnostic here (no "params" vs "actor_params" branching) since the
+    caller already knows which key its agent uses.
+    """
 
     rng, init_rng, reset_rng = jax.random.split(rng, 3)
     train_state = agent.init(init_rng)
+    if init_train_state_overrides:
+        train_state = {**train_state, **init_train_state_overrides}
     state = env.reset(reset_rng)
 
     def _train_step(train_state, state, rng):

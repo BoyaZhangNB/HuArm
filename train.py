@@ -2,11 +2,13 @@ import argparse
 from pathlib import Path
 
 import jax
+import jax.numpy as jp
 import numpy as np
 import orbax.checkpoint as ocp
 import yaml
 
 from training_interface import train
+from agents.obs_normalizer import RunningNorm
 from agents.ppo_agent import PPOAgent
 from agents.sac_agent import SACAgent
 from envs.erhu_env import ErhuEnv
@@ -24,6 +26,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--config", default=DEFAULT_CONFIG_PATH, help="Path to training YAML config."
+    )
+    parser.add_argument(
+        "--bc-checkpoint", default=None,
+        help="Path to a bc/train_bc.py checkpoint (e.g. bc/checkpoints/bc_sac_latest) to "
+             "warm-start the policy from, instead of agent.init()'s random weights. Must "
+             "have been trained with --algo matching this config's `algo` (param shapes are "
+             "restored structurally against a freshly-init'd agent of that type).",
     )
     args = parser.parse_args()
     cfg = load_config(args.config)
@@ -46,6 +55,29 @@ def main():
     algo = cfg.get("algo", "ppo")
     agent_cls = {"ppo": PPOAgent, "sac": SACAgent}[algo]
     agent = agent_cls(obs_size=env.observation_size, action_size=env.action_size, **agent_cfg)
+    param_key = {"ppo": "params", "sac": "actor_params"}[algo]
+
+    # 2b. Optionally warm-start the policy from a bc/train_bc.py checkpoint
+    # (imitation-learned from teleop.py demonstrations) instead of
+    # agent.init()'s random weights -- see training_interface.train()'s
+    # `init_train_state_overrides`.
+    init_overrides = None
+    if args.bc_checkpoint:
+        bc_path = Path(args.bc_checkpoint).resolve()
+        dummy_state = agent.init(jax.random.PRNGKey(cfg["seed"]))
+        bc_checkpointer = ocp.StandardCheckpointer()
+        restored_params = bc_checkpointer.restore(bc_path, dummy_state[param_key])
+        init_overrides = {param_key: restored_params}
+
+        bc_obs_norm_path = bc_path.with_name(bc_path.name + "_obs_norm.npz")
+        if bc_obs_norm_path.exists():
+            npz = np.load(bc_obs_norm_path)
+            init_overrides["obs_norm"] = RunningNorm(
+                mean=jp.asarray(npz["mean"]), var=jp.asarray(npz["var"]), count=jp.asarray(npz["count"])
+            )
+        else:
+            print(f"[WARNING] {bc_obs_norm_path} not found; keeping untrained obs-normalization stats.")
+        print(f"Warm-starting {algo} policy from BC checkpoint: {bc_path}")
 
     # 3. Train. Swapping `agent` swaps the whole algorithm; swapping the
     #    env class swaps the whole task/robot. Neither affects the other.
@@ -80,10 +112,10 @@ def main():
         eval_interval=train_cfg["eval_interval"],
         eval_episodes=train_cfg["eval_episodes"],
         log_fn=log_fn,
+        init_train_state_overrides=init_overrides,
     )
     logger.plot(train_cfg["metrics_path"])
     logger.close()
-    param_key = {"ppo": 'params', "sac": 'actor_params'}[algo]
     params = train_state[param_key]
 
     # Save parameters
