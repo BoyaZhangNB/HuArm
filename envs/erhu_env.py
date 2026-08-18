@@ -380,6 +380,7 @@ class ErhuEnv(MjxEnv):
             "max_contact_force": jp.asarray(0.0, dtype=jp.float32),
             "bow_a_force": jp.asarray(0.0, dtype=jp.float32),
             "bow_a_force_ema": jp.asarray(0.0, dtype=jp.float32),
+            "bow_velocity": jp.asarray(0.0, dtype=jp.float32),
             "bow_vel_ema": jp.asarray(0.0, dtype=jp.float32),
             "velocity_error": jp.asarray(0.0, dtype=jp.float32),
             "pressure_error": jp.asarray(0.0, dtype=jp.float32),
