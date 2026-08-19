@@ -37,6 +37,23 @@
                   margin="0.004"
                   gap="0.02"/>
         </default>
+
+        <default class="bow_stick_string_contact">
+            <!-- The wood parts of the bow (frog + both stick ends) should
+                 never actually touch the strings in normal play; this pair
+                 exists purely as an anti-tunneling backstop, not to be
+                 tuned for a smooth "touching" signal like the hair pairs
+                 above. margin=0.004 covers several timesteps of travel at
+                 the bow's ~0.5 m/s working speed (0.001 m/step @ dt=0.002s
+                 in erhu.xml), so the solver always sees the approach before
+                 the knife-thin string geometry could be skipped over
+                 within a single step. -->
+            <pair condim="3"
+                  friction="0.3 0.3 0.005 0.0001 0.0001"
+                  solref="0.01 1"
+                  solimp="0.9 0.95 0.001"
+                  margin="0.004"/>
+        </default>
     </default>
 
     <worldbody>
@@ -171,6 +188,18 @@
               geom1="bow_hair_geom" geom2="string_D_geom"/>
         <pair name="bow_hair_string_A_pair" class="bow_hair_string_contact"
               geom1="bow_hair_geom" geom2="string_A_geom"/>
+
+        <!-- Anti-tunneling backstop pairs: the wood bow should never cross
+             the strings, only the hair should touch them. -->
+        <pair name="bow_stick0_string_D_pair" class="bow_stick_string_contact"
+              geom1="bow_geom_0" geom2="string_D_geom"/>
+        <pair name="bow_stick0_string_A_pair" class="bow_stick_string_contact"
+              geom1="bow_geom_0" geom2="string_A_geom"/>
+        <pair name="bow_stick7_string_D_pair" class="bow_stick_string_contact"
+              geom1="bow_geom_7" geom2="string_D_geom"/>
+        <pair name="bow_stick7_string_A_pair" class="bow_stick_string_contact"
+              geom1="bow_geom_7" geom2="string_A_geom"/>
+
     </contact>
 
 </mujoco>
