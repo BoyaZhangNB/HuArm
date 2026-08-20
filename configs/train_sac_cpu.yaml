@@ -1,0 +1,42 @@
+# SAC training configuration. Run with:
+#   python train.py --config configs/train_sac.yaml
+#
+# Added to fix PPO's std-collapse local minimum (see configs/train.yaml's
+# PPO run: eval reward flatlines after ~15 iterations because the policy's
+# tanh-squashed mean saturates while log_std collapses). SAC's squashed
+# Gaussian policy applies the tanh-Jacobian correction properly and
+# auto-tunes its entropy coefficient against a target entropy, which
+# actively resists that collapse.
+
+algo: sac
+
+seed: 0
+
+env:
+  xml_path: huarm/arm.xml
+  num_envs: 1
+  episode_length: 512
+  n_frames: 20  # control freq = 0.002 * n_frames -> 25Hz at 20
+
+agent:
+  actor_lr: 3.0e-4
+  critic_lr: 3.0e-4
+  alpha_lr: 3.0e-4
+  gamma: 0.99
+  tau: 0.005
+  batch_size: 256
+  buffer_capacity: 500000
+  gradient_steps: 32
+  min_buffer_size: 10000
+  hidden_dim: 256
+  max_grad_norm: 1.0       # gradient clipping for actor/q1/q2 optimizers (previously unclipped)
+  alpha_max_grad_norm: 1.0 # separate clip for the alpha optimizer (different loss scale)
+
+train:
+  num_iterations: 400
+  steps_per_iteration: 128
+  eval_interval: 20
+  eval_episodes: 16
+  live_plot: false
+  metrics_path: metrics_sac.png
+  checkpoint_path: checkpoints/sac_model_latest

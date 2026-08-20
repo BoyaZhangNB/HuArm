@@ -19,6 +19,7 @@ Usage:
     python inference.py --algo sac                                   # sac, checkpoints/sac_model_latest
     python inference.py --algo sac --checkpoint bc/checkpoints/bc_sac_latest
     python inference.py --algo sac --checkpoint checkpoints/sac_model_latest --stochastic
+    python inference.py --xml huarm/arm_rigid.xml                        # override ErhuEnv's model XML
 """
 
 from __future__ import annotations
@@ -103,6 +104,10 @@ def parse_args() -> argparse.Namespace:
              "(sac), matching train.py's default --config checkpoint_path.",
     )
     parser.add_argument(
+        "--xml", default="huarm/arm.xml",
+        help="Path to the MuJoCo model XML for ErhuEnv (default: huarm/arm.xml).",
+    )
+    parser.add_argument(
         "--stochastic", action="store_true",
         help="Sample actions from the policy's distribution instead of its "
              "deterministic (tanh-mean) action.",
@@ -132,7 +137,7 @@ def main() -> None:
     args = parse_args()
     print(f"Using MuJoCo Version: {mujoco.__version__}")
 
-    env = ErhuEnv(episode_time_limit=args.episode_time_limit, dr_pool_size=128)
+    env = ErhuEnv(xml_path=args.xml, episode_time_limit=args.episode_time_limit, dr_pool_size=128)
     agent = build_agent(args.algo, env.observation_size, env.action_size)
 
     print(f"Loading {args.algo} checkpoint from {args.checkpoint}...")
