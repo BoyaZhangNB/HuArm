@@ -107,7 +107,7 @@ class ErhuEnv(MjxEnv):
         enable_forbidden_zone: bool = True,
         max_ctrl_delta: float = 0.05,
         episode_time_limit: float = 100.0,
-        f_max: float = 30.0,
+        f_max: float = 10.0,
         f_safe: float = 3.0,
         clip_penetration_limit: float = 0.01,
         string_tolerance: float = 0.15,
@@ -580,14 +580,12 @@ class ErhuEnv(MjxEnv):
     # ------------------------------------------------------------------
     def _termination(self, data: mjx.Data, k: Dict[str, jax.Array]) -> jax.Array:
         force_exceeded = k["max_contact_force"] > self.f_max
-        # bow_crossed_strings = k["touching"] & (k["min_dist"] < -self.clip_penetration_limit)
-        bow_crossed_strings = jp.asarray(False)  # disabled for now to prevent early termination
         if self.enable_forbidden_zone:
             entered_forbidden = k["forbidden_dist"] < 0.0
         else:
             entered_forbidden = jp.asarray(False)
         time_up = data.time > self.episode_time_limit
-        return force_exceeded | bow_crossed_strings | entered_forbidden | time_up
+        return force_exceeded | entered_forbidden | time_up
 
     def step(self, state: State, action: jax.Array) -> State:
         action = jp.clip(action, -1.0, 1.0)
