@@ -124,7 +124,7 @@ def main(xml_path):
                 if data.time >= next_tension_print:
                     next_tension_print = data.time + log_print_interval
                     # print_jp_dict(state.metrics)
-                    metrics_logger.log(data.time, state.metrics)
+                    metrics_logger.log(data.time, state.info)
 
         except KeyboardInterrupt:
             print("\nKeyboard interrupt received. Exiting.")

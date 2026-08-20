@@ -6,6 +6,7 @@ from mujoco import mjx
 from mujoco.mjx._src import support as mjx_support
 from .mjx_env import MjxEnv, State
 from .utils_envs import build_erhu_pose_pool, domain_randomize_jax, arm_joint_indices
+from . import utils_traj
 
 from typing import Any, Dict, Tuple
 
@@ -67,7 +68,7 @@ def _get_contact(data: mjx.Data):
 # ---------------------------------------------------------------------------
 
 def desired_velocity_and_pressure(
-    mjx_model: mjx.Model, data: mjx.Data
+    info: Dict[str, Any], x: jax.Array, v_limit: jax.Array, p_min: jax.Array, p_max: jax.Array
 ) -> Tuple[jax.Array, jax.Array]:
     """Returns (desired lateral bow velocity, target pressure in N).
 
@@ -76,10 +77,14 @@ def desired_velocity_and_pressure(
     (lateral) axis -- see `ErhuEnv._lateral_axis_local` -- positive/negative
     indicating stroke direction (e.g. push vs. pull) relative to the erhu,
     independent of the erhu's world pose.
+
+    Both values are read off a scripted reference bow stroke -- a quartic
+    speed/pressure profile over the bow's own normalized position `x` --
+    evaluated at `x`, the *real, measured* bow position (see
+    `ErhuEnv._bow_stroke_position`), against the segment shape carried in
+    `info["traj_*"]`; see `utils_traj`.
     """
-    velocity = jp.sin(2 * jp.pi * data.time / 5) * 0.05  # oscillate between -0.05 and 0.05 m/s
-    pressure = jp.asarray(2.0)
-    return velocity, pressure
+    return utils_traj.query_traj(info, x, v_limit, p_min, p_max)
 
 
 def forbidden_area_distance(mjx_model: mjx.Model, data: mjx.Data) -> jax.Array:
@@ -108,17 +113,22 @@ class ErhuEnv(MjxEnv):
         enable_forbidden_zone: bool = True,
         max_ctrl_delta: float = 0.05,
         episode_time_limit: float = 100.0,
-        f_max: float = 10.0,
+        f_max: float = 30.0,
         f_safe: float = 3.0,
         clip_penetration_limit: float = 0.01,
-        string_tolerance: float = 0.15,
         forbidden_margin: float = 0.1,
         contact_duration_scale: float = 20.0, # 20 steps (0.8s) give you reward of 0.76, 40 steps give you reward of 0.96, 60 steps give you reward of 0.99.
         contact_force_ema_alpha: float = 0.2, # low-pass factor on bow_a_force (per RL step, 25Hz); see `_step_kinematics`.
         velocity_ema_alpha: float = 0.3, # low-pass factor on lateral_vel (per RL step, 25Hz); see `_step_kinematics`.
         contact_steps_decay: float = 5.0, # steps of `contact_steps` lost per non-contact step, instead of an instant reset to 0.
-        velocity_kernel_scale: float = 40.0, # corresopnd to accpetable error of 0.025 [m/s].
+        velocity_kernel_scale: float = 40.0, # corresopnd to accpetable error of 0.03 [m/s].
         pressure_kernel_scale: float = 10.0, # corresopnd to accpetable error of 0.1 [N].
+        traj_v_limit: float = 0.1, # m/s, symmetric cap on the scripted reference velocity -- see utils_traj.
+        traj_p_min: float = 0.5, # N, lower bound used only when sampling a profile's interior control points.
+        traj_p_max: float = 3, # N, cap on the scripted reference pressure (kept under f_safe).
+        traj_accel_min: float = 0.005, # (m/s)^2, lower bound on the sampled velocity-profile curvature target `a_bar`.
+        traj_accel_max: float = 0.05, # (m/s)^2, upper bound on `a_bar` -- see utils_traj._fit_quartic.
+        traj_margin: float = 0.02, # normalized bow-position margin that triggers sampling a new reference segment.
         reward_weights: Dict[str, float] = None,
         dr_pool_size: int = 1024,
         dr_pool_seed: int = 0,
@@ -148,7 +158,6 @@ class ErhuEnv(MjxEnv):
         self.f_max = f_max
         self.f_safe = f_safe
         self.clip_penetration_limit = clip_penetration_limit
-        self.string_tolerance = string_tolerance
         self.forbidden_margin = forbidden_margin
         self.contact_duration_scale = contact_duration_scale
         self.contact_force_ema_alpha = contact_force_ema_alpha
@@ -156,6 +165,11 @@ class ErhuEnv(MjxEnv):
         self.contact_steps_decay = contact_steps_decay
         self.velocity_kernel_scale = velocity_kernel_scale
         self.pressure_kernel_scale = pressure_kernel_scale
+        self.traj_v_limit = traj_v_limit
+        self.traj_p_min = traj_p_min
+        self.traj_p_max = traj_p_max
+        self.traj_accel_range = (traj_accel_min, traj_accel_max)
+        self.traj_margin = traj_margin
 
         self.reward_weights = dict(
             velocity=1.0,
@@ -164,7 +178,6 @@ class ErhuEnv(MjxEnv):
             action_smoothness=0.5,
             bow_flat=0.2,
             bow_touch=0.2,
-            string_center=0.5,
             contact_penalty=1.0,
             forbidden=1.0,
             termination=1.0,
@@ -279,6 +292,24 @@ class ErhuEnv(MjxEnv):
         midpoint = midpoint.at[2].set(jp.maximum(midpoint[2], top_z) + 0.01)
         return midpoint
 
+    def _bow_stroke_position(self, data: mjx.Data) -> jax.Array:
+        """Real, measured normalized bow position in [-1, 1] (0 = centred
+        on the strings, -1/+1 = frog/tip) -- how far the bow has slid
+        laterally from the strings-crossing point, in units of
+        `utils_traj.BOW_HALF_LENGTH`. This is the positional analogue of
+        `lateral_vel` (see `_step_kinematics`): `mid` is a point rigid on
+        the bow, `_between_strings_target` is the point the bow's centre
+        should sit at, so their erhu-local,
+        lateral-axis-projected difference is a direct measurement, not
+        anything integrated over time -- see `utils_traj.query_traj`.
+        """
+        _, _, mid, _ = self._bow_geometry(data)
+        target = self._between_strings_target(data)
+        erhu_root = data.xmat[self._erhu_root_id].reshape(3, 3)
+        offset_local = erhu_root.T @ (mid - target)
+        lateral_offset = jp.dot(offset_local, self._lateral_axis_local)
+        return jp.clip(lateral_offset / utils_traj.BOW_HALF_LENGTH, -1.0, 1.0)
+
     def _sound_box_normal(self, data: mjx.Data) -> jax.Array:
         """Unit normal vector of the sound box's top surface, in world frame. Proxied by the string's normal."""
         return data.xmat[self._string_a_id].reshape(3, 3)[:, 2]
@@ -351,7 +382,7 @@ class ErhuEnv(MjxEnv):
 
     # ------------------------------------------------------------------
     def reset(self, rng: jax.Array) -> State:
-        rng, env_rng = jax.random.split(rng, 2)
+        rng, env_rng, traj_rng = jax.random.split(rng, 3)
 
         dr_params, data = domain_randomize_jax(
             self.mjx_model, self.mjx_data, env_rng, self._erhu_pose_pool,
@@ -369,6 +400,17 @@ class ErhuEnv(MjxEnv):
             "contact_steps": jp.asarray(0.0),
             "bow_a_force_ema": jp.asarray(0.0),
             "bow_vel_ema": jp.asarray(0.0),
+            # Scripted reference bow-stroke state (quartic speed/pressure
+            # profile over normalized bow position) -- see `utils_traj`.
+            # Seeded from the bow's real measured position (not a fixed
+            # 0.0) so the first segment starts where the arm's randomized
+            # pose actually put the bow -- the dr pool only admits poses
+            # verified "threaded between the strings", so this should
+            # already land close to centre.
+            **utils_traj.init_traj_info(
+                traj_rng, self._bow_stroke_position(data), self.traj_v_limit,
+                self.traj_p_min, self.traj_p_max, self.traj_accel_range,
+            ),
         }
         obs = self._get_obs(data, info, model)
         reward, done = jp.asarray(0.0, dtype=jp.float32), jp.asarray(0.0, dtype=jp.float32)
@@ -410,7 +452,10 @@ class ErhuEnv(MjxEnv):
 
         force = self._axial_force(data)
 
-        desired_velocity, desired_pressure = desired_velocity_and_pressure(model, data)
+        bow_x = self._bow_stroke_position(data)
+        desired_velocity, desired_pressure = desired_velocity_and_pressure(
+            info, bow_x, self.traj_v_limit, self.traj_p_min, self.traj_p_max
+        )
         forbidden_dist = forbidden_area_distance(model, data)
 
         obs = jp.concatenate([
@@ -471,7 +516,10 @@ class ErhuEnv(MjxEnv):
             jp.maximum(info["contact_steps"] - self.contact_steps_decay, 0.0),
         )
 
-        desired_velocity, desired_pressure = desired_velocity_and_pressure(model, data)
+        bow_x = self._bow_stroke_position(data)
+        desired_velocity, desired_pressure = desired_velocity_and_pressure(
+            info, bow_x, self.traj_v_limit, self.traj_p_min, self.traj_p_max
+        )
         forbidden_dist = forbidden_area_distance(model, data)
 
         return dict(
@@ -486,6 +534,7 @@ class ErhuEnv(MjxEnv):
             bow_vel_ema=bow_vel_ema,
             touching=touching,
             contact_steps=contact_steps,
+            bow_x=bow_x,
             desired_velocity=desired_velocity,
             desired_pressure=desired_pressure,
             forbidden_dist=forbidden_dist,
@@ -527,13 +576,6 @@ class ErhuEnv(MjxEnv):
         err = (mid_local[2] - self._sound_box_radius) / self._sound_box_radius
         return 1.0 / (1.0 + jp.square(err))
 
-    def _reward_string_center(self, data: mjx.Data, k: Dict[str, jax.Array]) -> jax.Array:
-        """Bow center should stay within `string_tolerance` of the between-strings target."""
-        target = self._between_strings_target(data)
-        string_dist = jp.linalg.norm(k["mid"] - target)
-        err = jp.maximum(0.0, string_dist - self.string_tolerance) / self.string_tolerance
-        return 1.0 / (1.0 + jp.square(err))
-
     def _reward_contact_penalty(self, k: Dict[str, jax.Array]) -> jax.Array:
         """Penalize the largest contact force in the scene above the soft
         safety threshold `f_safe` (not just force at the bow-mount sensor)."""
@@ -569,7 +611,6 @@ class ErhuEnv(MjxEnv):
             "action_smoothness": self._reward_action_smoothness(action, info),
             "bow_flat": self._reward_bow_flat(data, k),
             "bow_touch": self._reward_bow_touch_box(data, k),
-            "string_center": self._reward_string_center(data, k),
             "contact_penalty": self._reward_contact_penalty(k),
             "forbidden": self._reward_forbidden(k),
             "termination": self._reward_termination(terminated),
@@ -624,6 +665,21 @@ class ErhuEnv(MjxEnv):
         info["bow_vel_ema"] = k["bow_vel_ema"]
 
         obs = self._get_obs(data, info, model)
+
+        # Resample the scripted reference stroke's segment for next step,
+        # once the bow's real position has come within `traj_margin` of
+        # the current target -- see `utils_traj.maybe_resample`. `bow_x` is
+        # a stateless function of `data` alone, so `_get_obs` above and
+        # `_step_kinematics` earlier necessarily agreed on it regardless of
+        # ordering; this is kept after `obs` only to preserve "this step's
+        # outputs come from this step's segment, then advance for next
+        # step" as an easy invariant to reason about.
+        info = utils_traj.maybe_resample(
+            info, k["bow_x"],
+            self.traj_v_limit, self.traj_p_min, self.traj_p_max,
+            self.traj_accel_range, margin=self.traj_margin,
+        )
+
         metrics = {
             "joint_positions": data.qpos,
             "force_mag": k["force_mag"],
