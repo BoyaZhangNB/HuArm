@@ -102,6 +102,7 @@ class ErhuEnv(MjxEnv):
 
     def __init__(
         self,
+        xml_path: str = "huarm/arm.xml",
         n_frames: int = 20, # timestep 0.002 * 20 = 0.04s per step, 25Hz
         n_stack: int = 3,
         enable_forbidden_zone: bool = True,
@@ -123,7 +124,7 @@ class ErhuEnv(MjxEnv):
         dr_pool_seed: int = 0,
         **kwargs,
     ):
-        super().__init__(xml_path="huarm/arm.xml", n_frames=n_frames, **kwargs)
+        super().__init__(xml_path=xml_path, n_frames=n_frames, **kwargs)
         self.mjx_model = mjx.put_model(self.mj_model)
         self.mjx_data = mjx.put_data(self.mj_model, self.mj_data)
 

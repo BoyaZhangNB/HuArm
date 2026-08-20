@@ -18,7 +18,7 @@ joint3_body's own link (see `PITCH_BODY`/`PITCH_BODY_LOCAL_DIR`) *at the
 moment `reset` last fired* -- same relative-to-origin convention as (x, y,
 z), just for that one angle instead of position. Each control step,
 position and that single angle constraint are solved together to arm joint
-angles via damped least-squares IK (reusing `envs.utils_envs.jacobian_ik`,
+angles via damped least-squares IK (reusing `utils.jacobian_ik`,
 the same routine the env's own pose-pool/domain-randomization code uses),
 converted into the env's normalized delta-ctrl action space, and applied through
 `ErhuEnv.step` -- never by poking `data.ctrl` directly -- so the physics,
@@ -77,7 +77,8 @@ import jax.numpy as jp
 from mujoco import mjx
 
 from envs.erhu_env import ErhuEnv
-from envs.utils_envs import jacobian_ik, joint_to_actuator_id
+from envs.utils_envs import joint_to_actuator_id
+from utils import jacobian_ik
 
 
 # ---------------------------------------------------------------------------
@@ -413,11 +414,16 @@ def main():
              "guards against a bad/garbled UDP reading commanding an unreachable pose",
     )
     parser.add_argument("--episode-time-limit", type=float, default=1000.0)
+    parser.add_argument(
+        "--xml", default="huarm/arm.xml",
+        help="path to the MJCF file to load, e.g. huarm/arm.xml or huarm/arm_spring.xml",
+    )
     args = parser.parse_args()
 
     print(f"Using MuJoCo Version: {mujoco.__version__}")
+    print(f"Loading MJCF from {args.xml}")
 
-    env = ErhuEnv(episode_time_limit=args.episode_time_limit, dr_pool_size=128)
+    env = ErhuEnv(xml_path=args.xml, episode_time_limit=args.episode_time_limit, dr_pool_size=128)
     _reset = jax.jit(env.reset)
     _step = jax.jit(env.step)
 
@@ -512,7 +518,7 @@ def main():
                     if not awaiting_reset:
                         offset = np.clip(
                             [pkt["x"], -pkt["z"], pkt["y"]], -args.max_offset, args.max_offset
-                        )
+                        ) / 1.5
                         target = ee_origin + offset
 
                         # Operator pitch is a delta from PITCH_BODY's angle
