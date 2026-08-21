@@ -157,6 +157,13 @@ def main():
         eval_episodes=train_cfg["eval_episodes"],
         log_fn=log_fn,
         init_train_state_overrides=init_overrides,
+        # Hold the eval rng fixed across the whole run, so consecutive eval
+        # points differ only by the policy -- and give eval enough steps for
+        # the requested number of episodes to actually finish, instead of
+        # `eval`'s 2000-step default silently averaging whatever fraction of
+        # them fits (~3 at num_envs=1 and episode_length=512).
+        eval_rng=jax.random.PRNGKey(cfg["seed"] + 1),
+        eval_max_steps=train_cfg["eval_episodes"] * episode_length + episode_length,
     )
     logger.plot(train_cfg["metrics_path"])
     logger.close()

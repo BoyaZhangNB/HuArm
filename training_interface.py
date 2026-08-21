@@ -118,6 +118,13 @@ def eval(env, agent, train_state, rng, n_episodes, max_steps=2000):
     Only episodes that actually finish (done==1) are counted; any episode
     still in progress when `max_steps` is hit is dropped so it can't bias
     the average with a truncated, partial return.
+
+    `max_steps` is a hard cap on env steps, so it -- not `n_episodes` -- is
+    what actually decides how many episodes get averaged: at num_envs=1 and
+    512-step episodes, the 2000 default finishes ~3 of them however many
+    were asked for, and a 3-episode mean is noisy enough to hide a real
+    trend in `eval_reward`. `train()` sizes this from
+    `eval_episodes * episode_length` instead of relying on the default.
     """
 
     rng, reset_rng = jax.random.split(rng)
@@ -194,6 +201,8 @@ def train(
     eval_episodes: int,
     log_fn: Callable[[int, Dict[str, jax.Array]], None] = lambda i, m: None,
     init_train_state_overrides: Dict[str, Any] = None,
+    eval_rng: jax.Array = None,
+    eval_max_steps: int = None,
 ) -> Any:
     """Generic train loop: rollout -> update -> repeat. Swap `agent` to
     swap the entire learning algorithm; nothing else here changes.
@@ -204,6 +213,14 @@ def train(
     bc/train_bc.py checkpoint (see train.py's `--bc-checkpoint`). Kept
     agent-agnostic here (no "params" vs "actor_params" branching) since the
     caller already knows which key its agent uses.
+
+    `eval_rng` is held *fixed* across every eval in the run (rather than
+    threading the training rng through, which made consecutive evals differ
+    by their sampled trajectories as much as by the policy): eval then
+    varies only with the policy being evaluated. `eval_max_steps` likewise
+    has to be big enough for `eval_episodes` episodes to actually finish --
+    see `eval`'s `max_steps`, whose default silently truncates a
+    16-episode request to whatever fits in 2000 steps.
     """
 
     rng, init_rng, reset_rng = jax.random.split(rng, 3)
@@ -221,8 +238,16 @@ def train(
 
     _train_step = jax.jit(_train_step)
 
+    if eval_rng is None:
+        rng, eval_rng = jax.random.split(rng)
+
     def _eval_fn(train_state, rng):
-        return eval(env, agent, train_state, rng, n_episodes=eval_episodes)
+        if eval_max_steps is None:
+            return eval(env, agent, train_state, rng, n_episodes=eval_episodes)
+        return eval(
+            env, agent, train_state, rng,
+            n_episodes=eval_episodes, max_steps=eval_max_steps,
+        )
 
     _eval = jax.jit(_eval_fn)
 
@@ -231,7 +256,7 @@ def train(
             train_state, state, rng, metrics = _train_step(train_state, state, rng)
 
             if it % eval_interval == 0:
-                eval_metrics = _eval(train_state, rng)
+                eval_metrics = _eval(train_state, eval_rng)
                 metrics["eval_reward"] = eval_metrics["reward"]
                 metrics["eval_episode_length"] = eval_metrics["episode_length"]
                 for name, val in eval_metrics["reward_terms"].items():
