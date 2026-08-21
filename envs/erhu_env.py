@@ -121,7 +121,7 @@ class ErhuEnv(MjxEnv):
         contact_force_ema_alpha: float = 0.2, # low-pass factor on bow_a_force (per RL step, 25Hz); see `_step_kinematics`.
         velocity_ema_alpha: float = 0.3, # low-pass factor on lateral_vel (per RL step, 25Hz); see `_step_kinematics`.
         contact_steps_decay: float = 5.0, # steps of `contact_steps` lost per non-contact step, instead of an instant reset to 0.
-        velocity_kernel_scale: float = 40.0, # corresopnd to accpetable error of 0.03 [m/s].
+        velocity_kernel_scale: float = 100.0, # corresopnd to accpetable error of 0.01 [m/s].
         pressure_kernel_scale: float = 10.0, # corresopnd to accpetable error of 0.1 [N].
         traj_v_limit: float = 0.1, # m/s, symmetric cap on the scripted reference velocity -- see utils_traj.
         traj_p_min: float = 0.5, # N, lower bound used only when sampling a profile's interior control points.

@@ -189,7 +189,7 @@ def main() -> None:
                 if data.time >= next_log:
                     next_log = data.time + args.log_interval
                     print_jp_dict(state.metrics)
-                    metrics_logger.log(data.time, state.metrics["reward_terms"])
+                    metrics_logger.log(data.time, state.metrics)
 
         except KeyboardInterrupt:
             print("\nKeyboard interrupt received. Exiting.")

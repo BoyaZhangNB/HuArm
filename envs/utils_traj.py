@@ -59,7 +59,7 @@ BOW_HALF_LENGTH = 0.20
 
 # Minimum guaranteed "creep" speed toward the segment target, as a fraction
 # of `v_limit` -- see `query_traj`.
-_MIN_CREEP_VEL = 0.01
+_MIN_CREEP_VEL = 0.02
 
 
 # ---------------------------------------------------------------------------
