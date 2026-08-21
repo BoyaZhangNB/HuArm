@@ -17,8 +17,6 @@ env:
   num_envs: 1
   episode_length: 512
   n_frames: 20  # control freq = 0.002 * n_frames -> 25Hz at 20
-  log_alpha_min: -10
-  target_entropy: -5.0
 
 agent:
   actor_lr: 3.0e-4
@@ -27,9 +25,9 @@ agent:
   gamma: 0.99
   tau: 0.005
   batch_size: 256
-  buffer_capacity: 150000
+  buffer_capacity: 500000
   gradient_steps: 32
-  min_buffer_size: 2000
+  min_buffer_size: 10000
   hidden_dim: 256
   max_grad_norm: 1.0
   alpha_max_grad_norm: 1.0
@@ -38,7 +36,7 @@ train:
   num_iterations: 800
   steps_per_iteration: 128
   eval_interval: 20
-  eval_episodes: 8
+  eval_episodes: 16
   live_plot: false
-  metrics_path: metrics_sac.png
-  checkpoint_path: checkpoints/sac_model_rand_traj
+  metrics_path: metrics_sac_800.png
+  checkpoint_path: checkpoints/sac_model_rand_traj_800
