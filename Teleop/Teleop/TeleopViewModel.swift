@@ -15,9 +15,9 @@ import Foundation
 
 @MainActor
 final class TeleopViewModel: ObservableObject {
-    @Published var host: String = "192.168.1.149"
-    @Published var port: String = "5005"
-    @Published var tcpPort: String = "5006"
+    @Published var host: String = RobotDefaults.host
+    @Published var port: String = RobotDefaults.positionPort
+    @Published var tcpPort: String = RobotDefaults.controlPort
     @Published var isStreaming = false
     @Published var isCollecting = false
     @Published var lastResetAt: Date?

@@ -87,8 +87,15 @@ from utils import jacobian_ik
 # ---------------------------------------------------------------------------
 
 class UDPReceiver(threading.Thread):
-    def __init__(self, host: str, port: int, buf_size: int = 2048):
+    """Streams one JSON object per datagram off (host, port), keeping only
+    the most recently received valid packet (zero-order hold between
+    arrivals). Subclasses override `parse` to accept a different packet
+    struct -- see inference.py's CommandReceiver, which reads the
+    velocity/pressure stream the same phone sends."""
+
+    def __init__(self, host: str, port: int, buf_size: int = 2048, label: str = "udp"):
         super().__init__(daemon=True)
+        self._label = label
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind((host, port))
@@ -97,6 +104,18 @@ class UDPReceiver(threading.Thread):
         self._lock = threading.Lock()
         self._latest = None
         self._stop_evt = threading.Event()
+
+    @staticmethod
+    def parse(pkt: dict) -> dict:
+        """PositionPacket -> the dict stored as "latest". Raises
+        KeyError/TypeError/ValueError to have the datagram dropped as
+        malformed."""
+        return {
+            "x": float(pkt["x"]),
+            "y": float(pkt["y"]),
+            "z": float(pkt["z"]),
+            "pitch": float(pkt["pitch"]),
+        }
 
     def run(self):
         while not self._stop_evt.is_set():
@@ -107,15 +126,9 @@ class UDPReceiver(threading.Thread):
             except OSError:
                 break  # socket closed from stop()
             try:
-                pkt = json.loads(raw.decode("utf-8"))
-                parsed = {
-                    "x": float(pkt["x"]),
-                    "y": float(pkt["y"]),
-                    "z": float(pkt["z"]),
-                    "pitch": float(pkt["pitch"]),
-                }
-            except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
-                print(f"[udp] dropping malformed position packet: {e}")
+                parsed = self.parse(json.loads(raw.decode("utf-8")))
+            except (json.JSONDecodeError, UnicodeDecodeError, KeyError, TypeError, ValueError) as e:
+                print(f"[{self._label}] dropping malformed packet: {e}")
                 continue
             with self._lock:
                 self._latest = parsed

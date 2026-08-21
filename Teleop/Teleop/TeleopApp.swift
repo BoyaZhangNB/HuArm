@@ -11,7 +11,23 @@ import SwiftUI
 struct TeleopApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            // Two independent pages, each with its own connection and
+            // stream: ContentView teleoperates the arm through teleop.py,
+            // BowCommandView hands a running inference.py policy the bow
+            // velocity/pressure it should chase. A TabView (rather than a
+            // push) keeps both alive while the other is on screen, so
+            // switching pages never tears down an active stream.
+            TabView {
+                ContentView()
+                    .tabItem {
+                        Label("Arm", systemImage: "hand.draw")
+                    }
+
+                BowCommandView()
+                    .tabItem {
+                        Label("Bow", systemImage: "slider.horizontal.3")
+                    }
+            }
         }
     }
 }
