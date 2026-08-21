@@ -1,4 +1,5 @@
 import argparse
+import shutil
 from pathlib import Path
 
 import jax
@@ -167,6 +168,15 @@ def main():
     path = Path(train_cfg["checkpoint_path"]).resolve()
     checkpointer.save(path, params)
     checkpointer.wait_until_finished()
+
+    # Copy the exact config used to train this checkpoint, and a copy of the
+    # training plot, into the checkpoint folder itself -- so each checkpoint
+    # is self-describing even after configs/metrics_path get edited/reused
+    # for later runs.
+    shutil.copy(Path(args.config).resolve(), path / Path(args.config).name)
+    metrics_src = Path(train_cfg["metrics_path"]).resolve()
+    if metrics_src.exists():
+        shutil.copy(metrics_src, path / metrics_src.name)
 
     # Save the running observation-normalization constants training ended
     # with, so inference/eval can reproduce the exact same obs scaling the
