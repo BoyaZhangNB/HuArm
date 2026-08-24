@@ -5,47 +5,12 @@ import mujoco
 from mujoco import mjx
 from mujoco.mjx._src import support as mjx_support
 from .mjx_env import MjxEnv, State
-from .utils_envs import build_erhu_pose_pool, domain_randomize_jax, arm_joint_indices
-from . import utils_traj
+from .utils_envs import (
+    arm_joint_indices, build_erhu_pose_pool, mat_to_quat, quat_conj, quat_mul,
+)
+from . import utils_dr, utils_noise, utils_traj
 
 from typing import Any, Dict, Tuple
-
-
-# ---------------------------------------------------------------------------
-# Small self-contained quaternion helpers (jax-native, jit/vmap safe).
-# Not pulled from mujoco.mjx._src.math since that module is private API.
-# ---------------------------------------------------------------------------
-
-def _mat_to_quat(mat: jax.Array) -> jax.Array:
-    """3x3 rotation matrix -> quaternion (w, x, y, z)."""
-    m00, m01, m02 = mat[0, 0], mat[0, 1], mat[0, 2]
-    m10, m11, m12 = mat[1, 0], mat[1, 1], mat[1, 2]
-    m20, m21, m22 = mat[2, 0], mat[2, 1], mat[2, 2]
-    tr = m00 + m11 + m22
-    qw = jp.sqrt(jp.maximum(0.0, 1.0 + tr)) / 2.0
-    qx = jp.sqrt(jp.maximum(0.0, 1.0 + m00 - m11 - m22)) / 2.0
-    qy = jp.sqrt(jp.maximum(0.0, 1.0 - m00 + m11 - m22)) / 2.0
-    qz = jp.sqrt(jp.maximum(0.0, 1.0 - m00 - m11 + m22)) / 2.0
-    qx = jp.copysign(qx, m21 - m12)
-    qy = jp.copysign(qy, m02 - m20)
-    qz = jp.copysign(qz, m10 - m01)
-    return jp.array([qw, qx, qy, qz])
-
-
-def _quat_mul(q1: jax.Array, q2: jax.Array) -> jax.Array:
-    w1, x1, y1, z1 = q1
-    w2, x2, y2, z2 = q2
-    return jp.array([
-        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
-        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
-        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
-        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
-    ])
-
-
-def _quat_conj(q: jax.Array) -> jax.Array:
-    w, x, y, z = q
-    return jp.array([w, -x, -y, -z])
 
 
 def _get_contact(data: mjx.Data):
@@ -94,6 +59,32 @@ def forbidden_area_distance(mjx_model: mjx.Model, data: mjx.Data) -> jax.Array:
     return jp.asarray(1e3)
 
 
+# ---------------------------------------------------------------------------
+# Default observation noise, per block of `ErhuEnv._get_obs`'s vector (see
+# `utils_noise` for the models). Each block gets an independent per-step read
+# error plus a slowly drifting bias, because a real sensor has both.
+#
+# The blocks below are the ones `_get_obs` perturbs. The scripted reference
+# values are commands rather than measurements, so they stay exact. The
+# history blocks are not perturbed *again* here, but `force_history` is not
+# clean either: `step` writes the noisy measurement into it as it is
+# observed, which is what a policy reading a real sensor's history would
+# have (actions are known exactly, so `action_history` is exact).
+# ---------------------------------------------------------------------------
+
+DEFAULT_OBS_NOISE = {
+    # joint encoders, rad
+    "qpos": ({"kind": "white", "scale": 0.001}, {"kind": "pink", "scale": 0.001}),
+    # differentiated encoder counts, rad/s -- an order noisier than position
+    "qvel": ({"kind": "white", "scale": 0.02}, {"kind": "pink", "scale": 0.01}),
+    # erhu/bow poses, m -- vision-estimated at inference time, so a jittery
+    # reading on top of a slowly drifting calibration offset
+    "pose": ({"kind": "white", "scale": 0.002}, {"kind": "pink", "scale": 0.004}),
+    # bow-mount load cell, N -- sensor noise plus thermal zero drift
+    "force": ({"kind": "white", "scale": 0.05}, {"kind": "pink", "scale": 0.025}),
+}
+
+
 class ErhuEnv(MjxEnv):
     """Erhu bowing task for the HuArm robot. n_frames is frame_skip.
 
@@ -132,6 +123,9 @@ class ErhuEnv(MjxEnv):
         reward_weights: Dict[str, float] = None,
         dr_pool_size: int = 1024,
         dr_pool_seed: int = 0,
+        dr_config: Dict[str, Any] = None, # overrides for utils_dr.DomainRandConfig, e.g. {"enabled": False}.
+        obs_noise: Dict[str, Any] = None, # per-block overrides for DEFAULT_OBS_NOISE.
+        obs_noise_scale: float = 1.0, # global multiplier on every obs-noise scale; 0 turns it off.
         **kwargs,
     ):
         super().__init__(xml_path=xml_path, n_frames=n_frames, **kwargs)
@@ -143,13 +137,12 @@ class ErhuEnv(MjxEnv):
             jax.random.PRNGKey(dr_pool_seed), dr_pool_size, seed=dr_pool_seed,
         )
 
-        # Static arm-joint index arrays for domain_randomize_jax /
-        # _set_joint_ctrl_jax, computed once here instead of on every
-        # reset() to cut python-side mj_name2id lookups off the hot path.
-        (self._arm_qpos_idxs,
-         self._arm_ctrl_aids,
-         self._arm_ctrl_qpos_idxs,
-         self._arm_act_idxs) = arm_joint_indices(self.mj_model)
+        # Static index arrays for utils_dr.domain_randomize, computed once
+        # here instead of on every reset() to cut python-side mj_name2id
+        # lookups off the hot path.
+        self._arm_idxs = arm_joint_indices(self.mj_model)
+        self._dr_idxs = utils_dr.dr_indices(self.mj_model)
+        self.dr_config = utils_dr.DomainRandConfig.from_dict(dr_config)
 
         self.n_stack = n_stack
         self.enable_forbidden_zone = enable_forbidden_zone
@@ -259,10 +252,39 @@ class ErhuEnv(MjxEnv):
         # The erhu's local left/right axis, expressed in the erhu root frame.
         self._lateral_axis_local = jp.array([1.0, 0.0, 0.0])
 
+        # Observation noise. `sizes` must list the blocks in `_get_obs`'s
+        # concatenation order -- the noise vector covers that prefix of the
+        # observation.
+        self.obs_noise = utils_noise.ObsNoise(
+            sizes={
+                "qpos": int(self._obs_qpos_idxs.shape[0]),
+                "qvel": int(self._obs_qvel_idxs.shape[0]),
+                # sound_box_rel(3), rel_quat(4), frog/tip/mid_rel(3 each)
+                "pose": 16,
+                "force": self._force_dim,
+            },
+            specs={**DEFAULT_OBS_NOISE, **(obs_noise or {})},
+            scale=obs_noise_scale,
+        )
+
     # ------------------------------------------------------------------
-    def _effective_model(self, dr_params: Dict[str, jax.Array]) -> mjx.Model:
+    def effective_model(
+        self,
+        dr_params: Dict[str, jax.Array],
+        drift: Dict[str, jax.Array],
+        time: jax.Array,
+    ) -> mjx.Model:
         """Merges this episode's randomized fields onto the closure-captured
-        base `self.mjx_model`."""
+        base `self.mjx_model`, with the erhu moved to wherever its slow drift
+        has taken it by `time` -- see `utils_dr.erhu_pose_at`."""
+        pos, quat = utils_dr.erhu_pose_at(
+            dr_params["body_pos"][self._erhu_root_id],
+            dr_params["body_quat"][self._erhu_root_id],
+            drift, time,
+        )
+        dr_params = dict(dr_params)
+        dr_params["body_pos"] = dr_params["body_pos"].at[self._erhu_root_id].set(pos)
+        dr_params["body_quat"] = dr_params["body_quat"].at[self._erhu_root_id].set(quat)
         return self.mjx_model.replace(**dr_params)
 
     # ------------------------------------------------------------------
@@ -355,7 +377,7 @@ class ErhuEnv(MjxEnv):
         """Per-contact-slot linear contact force magnitude, shape (ncon,).
         
         `model` should be this episode's effective (possibly randomized)
-        model -- see `_effective_model` -- not necessarily `self.mjx_model`.
+        model -- see `effective_model` -- not necessarily `self.mjx_model`.
         """
         forces = [
             mjx_support.contact_force(model, data, i)[:3]
@@ -382,21 +404,23 @@ class ErhuEnv(MjxEnv):
 
     # ------------------------------------------------------------------
     def reset(self, rng: jax.Array) -> State:
-        rng, env_rng, traj_rng = jax.random.split(rng, 3)
+        rng, env_rng, traj_rng, noise_rng = jax.random.split(rng, 4)
 
-        dr_params, data = domain_randomize_jax(
+        dr_params, drift, data = utils_dr.domain_randomize(
             self.mjx_model, self.mjx_data, env_rng, self._erhu_pose_pool,
-            self._arm_qpos_idxs, self._arm_ctrl_aids, self._arm_ctrl_qpos_idxs,
-            self._arm_act_idxs,
+            self._arm_idxs, self._dr_idxs, self.dr_config,
         )
-        model = self._effective_model(dr_params)
+        model = self.effective_model(dr_params, drift, data.time)
 
         _, _, mid, _ = self._bow_geometry(data)
         info: Dict[str, Any] = {
             "dr_params": dr_params,
+            # Where the erhu drifts to over this episode, and how fast --
+            # applied to the model every step, see `effective_model`.
+            "erhu_drift": drift,
             "action_history": jp.zeros((self.n_stack, self.action_size)),
             "force_history": jp.zeros((self.n_stack, self._force_dim)),
-            "prev_bow_mid": mid,
+            "prev_bow_mid_local": self._relative(mid, self._erhu_root_id, data),
             "contact_steps": jp.asarray(0.0),
             "bow_a_force_ema": jp.asarray(0.0),
             "bow_vel_ema": jp.asarray(0.0),
@@ -411,6 +435,9 @@ class ErhuEnv(MjxEnv):
                 traj_rng, self._bow_stroke_position(data), self.traj_v_limit,
                 self.traj_p_min, self.traj_p_max, self.traj_accel_range,
             ),
+            # This step's observation noise, plus the rng and pink-noise
+            # state behind it -- see `utils_noise` and `_get_obs`.
+            **utils_noise.init_noise_info(self.obs_noise, noise_rng),
         }
         obs = self._get_obs(data, info, model)
         reward, done = jp.asarray(0.0, dtype=jp.float32), jp.asarray(0.0, dtype=jp.float32)
@@ -446,9 +473,9 @@ class ErhuEnv(MjxEnv):
         tip_rel = self._relative(tip, self._erhu_root_id, data)
         mid_rel = self._relative(mid, self._erhu_root_id, data)
 
-        bow_quat = _mat_to_quat(data.xmat[self._bow_link1_id].reshape(3, 3))
-        erhu_quat = _mat_to_quat(data.xmat[self._erhu_root_id].reshape(3, 3))
-        rel_quat = _quat_mul(_quat_conj(erhu_quat), bow_quat)
+        bow_quat = mat_to_quat(data.xmat[self._bow_link1_id].reshape(3, 3))
+        erhu_quat = mat_to_quat(data.xmat[self._erhu_root_id].reshape(3, 3))
+        rel_quat = quat_mul(quat_conj(erhu_quat), bow_quat)
 
         force = self._axial_force(data)
 
@@ -468,6 +495,11 @@ class ErhuEnv(MjxEnv):
             info["action_history"].reshape(-1),
             info["force_history"].reshape(-1),
         ])
+        # Sensor noise, covering the measurement blocks above (everything up
+        # to `desired_velocity`) -- drawn once per step into info so the
+        # observation stays a pure function of (data, info).
+        if self.obs_noise.size:
+            obs = obs.at[:self.obs_noise.size].add(info["obs_noise"])
         return obs
 
     # ------------------------------------------------------------------
@@ -484,12 +516,16 @@ class ErhuEnv(MjxEnv):
         bow_a_force = self._bow_hair_a_string_force(data, model)
 
         frog, tip, mid, bow_axis = self._bow_geometry(data)
-        bow_vel_world = (mid - info["prev_bow_mid"]) / self.dt
-        # Tracking error is computed in the erhu's local frame: rotate the
-        # (world-frame, finite-difference) bow velocity into erhu_root and
-        # keep only the lateral (left/right) component.
-        erhu_root = data.xmat[self._erhu_root_id].reshape(3, 3)
-        bow_vel_local = erhu_root.T @ bow_vel_world
+        # Tracking error is computed in the erhu's local frame, and so is the
+        # velocity itself: what a bow stroke *is* is motion of the hair
+        # relative to the strings, so the finite difference is taken between
+        # the bow's position expressed in erhu_root now and one step ago
+        # (`prev_bow_mid_local`), not between two world positions. With the
+        # erhu drifting under the bow (see `utils_dr.sample_erhu_drift`) the
+        # two differ: a world-frame difference would credit the policy for
+        # holding still while the instrument slid past the hair.
+        mid_local = self._relative(mid, self._erhu_root_id, data)
+        bow_vel_local = (mid_local - info["prev_bow_mid_local"]) / self.dt
         # Bow should move in the normal direction of the cynlider.
         lateral_vel = jp.dot(bow_vel_local, self._lateral_axis_local)
 
@@ -529,6 +565,7 @@ class ErhuEnv(MjxEnv):
             bow_a_force=bow_a_force,
             bow_a_force_ema=bow_a_force_ema,
             mid=mid,
+            mid_local=mid_local,
             bow_axis=bow_axis,
             lateral_vel=lateral_vel,
             bow_vel_ema=bow_vel_ema,
@@ -632,12 +669,14 @@ class ErhuEnv(MjxEnv):
     def step(self, state: State, action: jax.Array) -> State:
         action = jp.clip(action, -1.0, 1.0)
         prev_data = state.pipeline_state
-        # Per-episode randomized model fields sampled in reset(); carried
-        # unchanged in info so the same randomized dynamics apply all
-        # episode long. Merged onto the closure-captured base model here
-        # rather than carrying a full mjx.Model through info -- see
-        # `_effective_model`.
-        model = self._effective_model(state.info["dr_params"])
+        # Per-episode randomized model fields sampled in reset() and carried
+        # in info, so the same randomized dynamics apply all episode long --
+        # except the erhu's placement, which drifts with `prev_data.time`.
+        # Merged onto the closure-captured base model here rather than
+        # carrying a full mjx.Model through info -- see `effective_model`.
+        model = self.effective_model(
+            state.info["dr_params"], state.info["erhu_drift"], prev_data.time
+        )
         ctrl = jp.clip(
             prev_data.ctrl + action * self.max_ctrl_delta, self._ctrl_lo, self._ctrl_hi
         )
@@ -656,13 +695,23 @@ class ErhuEnv(MjxEnv):
         info["action_history"] = jp.concatenate(
             [info["action_history"][1:], action[None, :]], axis=0
         )
-        info["force_history"] = jp.concatenate(
-            [info["force_history"][1:], jp.reshape(k["force"], (1, 1))], axis=0
-        )
-        info["prev_bow_mid"] = k["mid"]
+        info["prev_bow_mid_local"] = k["mid_local"]
         info["contact_steps"] = k["contact_steps"]
         info["bow_a_force_ema"] = k["bow_a_force_ema"]
         info["bow_vel_ema"] = k["bow_vel_ema"]
+        # Draw this step's sensor noise before the force history is written:
+        # the history holds what the load cell *reported*, i.e. the same
+        # noisy value this step's observation carries in its force slot, so
+        # the policy sees the same kind of signal in the history at
+        # inference time as it does in training. `_get_obs` adds no further
+        # noise to the history block -- see `DEFAULT_OBS_NOISE`.
+        info.update(utils_noise.step_noise_info(info, self.obs_noise))
+        measured_force = jp.reshape(k["force"], (self._force_dim,)) + self.obs_noise.block(
+            info["obs_noise"], "force"
+        )
+        info["force_history"] = jp.concatenate(
+            [info["force_history"][1:], measured_force[None, :]], axis=0
+        )
 
         obs = self._get_obs(data, info, model)
 

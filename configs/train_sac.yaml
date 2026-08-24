@@ -16,6 +16,12 @@ env:
   num_envs: 64
   episode_length: 512
   n_frames: 20  # control freq = 0.002 * n_frames -> 25Hz at 20
+  # Domain randomization (see envs/utils_dr.py, envs/utils_noise.py and the
+  # README). Both default to on; these are the knobs, not new behaviour:
+  #   dr_config: {enabled: false}            # no physics randomization
+  #   dr_config: {bow_mass_range: [0.5, 1.5]}
+  #   obs_noise_scale: 0.0                   # no observation noise
+  #   obs_noise: {force: [{kind: white, scale: 0.1}]}
 
 agent:
   actor_lr: 3.0e-4

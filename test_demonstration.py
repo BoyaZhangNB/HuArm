@@ -25,6 +25,7 @@ import numpy as np
 from mujoco import mjx
 
 from envs.erhu_env import ErhuEnv
+from envs import utils_dr
 
 
 def latest_demo(demo_dir: Path) -> Path:
@@ -35,32 +36,41 @@ def latest_demo(demo_dir: Path) -> Path:
 
 
 def load_demo(path: Path):
-    """Splits a saved demo's npz into (dr_params, init_state, actions),
-    undoing the `dr_`/`init_` key prefixes `DemoRecorder.stop_and_save` adds
-    -- see teleop.py."""
+    """Splits a saved demo's npz into (dr_params, erhu_drift, init_state,
+    actions), undoing the `dr_`/`drift_`/`init_` key prefixes
+    `DemoRecorder.stop_and_save` adds -- see teleop.py."""
     npz = np.load(path)
-    dr_params = {k[len("dr_"):]: jp.asarray(v) for k, v in npz.items() if k.startswith("dr_")}
-    init_state = {k[len("init_"):]: jp.asarray(v) for k, v in npz.items() if k.startswith("init_")}
+
+    def by_prefix(prefix):
+        return {k[len(prefix):]: jp.asarray(v) for k, v in npz.items() if k.startswith(prefix)}
+
+    dr_params, init_state = by_prefix("dr_"), by_prefix("init_")
     if not dr_params or not init_state:
         raise ValueError(
             f"{path} has no dr_*/init_* metadata -- it predates demo playback support "
             "and can't be replayed as the exact recorded model/state."
         )
-    return dr_params, init_state, npz["action"]
+    # drift_* is younger than dr_*/init_*; a demo recorded before the erhu
+    # drift existed was recorded against a stationary erhu, so replay it
+    # that way rather than against a freshly drawn drift.
+    drift = by_prefix("drift_") or utils_dr.no_erhu_drift()
+    return dr_params, drift, init_state, npz["action"]
 
 
-def build_playback_state(env: ErhuEnv, dr_params, init_state):
+def build_playback_state(env: ErhuEnv, dr_params, erhu_drift, init_state):
     """Rebuilds the exact State a recorded demo started from: this
-    episode's domain-randomized model (`dr_params`) plus the live physics
-    state recording began at (`init_state`). `env.reset()` is only called
-    to get a template State (for its info/obs pytree shapes) -- its own
-    randomly-drawn dr_params/pose are entirely overwritten below."""
+    episode's domain-randomized model (`dr_params` plus the erhu's drift
+    over the episode) and the live physics state recording began at
+    (`init_state`, including the solver warm start). `env.reset()` is only
+    called to get a template State
+    (for its info/obs pytree shapes) -- its own randomly-drawn
+    dr_params/drift/pose are entirely overwritten below."""
     template = env.reset(jax.random.PRNGKey(0))
-    model = env.mjx_model.replace(**dr_params)
-    data = template.pipeline_state.replace(**init_state)
-    data = mjx.forward(model, data)
     info = dict(template.info)
     info["dr_params"] = dr_params
+    info["erhu_drift"] = erhu_drift
+    data = template.pipeline_state.replace(**init_state)
+    data = mjx.forward(env.effective_model(dr_params, erhu_drift, data.time), data)
     return template.replace(pipeline_state=data, info=info)
 
 
@@ -75,7 +85,7 @@ def main():
 
     demo_path = Path(args.demo) if args.demo else latest_demo(Path(args.demo_dir))
     print(f"Loading demonstration: {demo_path}")
-    dr_params, init_state, actions = load_demo(demo_path)
+    dr_params, erhu_drift, init_state, actions = load_demo(demo_path)
     print(f"  {len(actions)} steps, dr_params={sorted(dr_params)}, init_state={sorted(init_state)}")
 
     print(f"Using MuJoCo Version: {mujoco.__version__}")
@@ -85,7 +95,7 @@ def main():
     env = ErhuEnv(episode_time_limit=1e9, dr_pool_size=1)
     _step = jax.jit(env.step)
 
-    state = build_playback_state(env, dr_params, init_state)
+    state = build_playback_state(env, dr_params, erhu_drift, init_state)
     model = env.mj_model
     data = mjx.get_data(model, state.pipeline_state)
 
@@ -112,7 +122,7 @@ def main():
                       f"in {time.time() - wall_start:.2f}s (wall)")
                 if not args.loop:
                     break
-                state = build_playback_state(env, dr_params, init_state)
+                state = build_playback_state(env, dr_params, erhu_drift, init_state)
         except KeyboardInterrupt:
             print("\nKeyboard interrupt received. Exiting.")
 

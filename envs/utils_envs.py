@@ -129,6 +129,59 @@ def joint_to_actuator_id(model, joint_name):
 # within ~0.1 s. Holding it needs stiffness on that hinge in the model.
 
 
+# ---------------------------------------------------------------------------
+# Small jax-native quaternion helpers, shared by erhu_env.py (observations)
+# and utils_dr.py (erhu placement). Quaternions are (w, x, y, z). Not pulled
+# from mujoco.mjx._src.math, which is private API.
+# ---------------------------------------------------------------------------
+
+def mat_to_quat(mat):
+    """3x3 rotation matrix -> quaternion."""
+    m00, m01, m02 = mat[0, 0], mat[0, 1], mat[0, 2]
+    m10, m11, m12 = mat[1, 0], mat[1, 1], mat[1, 2]
+    m20, m21, m22 = mat[2, 0], mat[2, 1], mat[2, 2]
+    tr = m00 + m11 + m22
+    qw = jnp.sqrt(jnp.maximum(0.0, 1.0 + tr)) / 2.0
+    qx = jnp.sqrt(jnp.maximum(0.0, 1.0 + m00 - m11 - m22)) / 2.0
+    qy = jnp.sqrt(jnp.maximum(0.0, 1.0 - m00 + m11 - m22)) / 2.0
+    qz = jnp.sqrt(jnp.maximum(0.0, 1.0 - m00 - m11 + m22)) / 2.0
+    qx = jnp.copysign(qx, m21 - m12)
+    qy = jnp.copysign(qy, m02 - m20)
+    qz = jnp.copysign(qz, m10 - m01)
+    return jnp.array([qw, qx, qy, qz])
+
+
+def quat_mul(q1, q2):
+    w1, x1, y1, z1 = q1
+    w2, x2, y2, z2 = q2
+    return jnp.array([
+        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+    ])
+
+
+def quat_conj(q):
+    w, x, y, z = q
+    return jnp.array([w, -x, -y, -z])
+
+
+def quat_rotate(q, v):
+    """Rotates vector `v` by quaternion `q`."""
+    w, u = q[0], q[1:]
+    return v + 2.0 * jnp.cross(u, jnp.cross(u, v) + w * v)
+
+
+def quat_nlerp(q0, q1, t):
+    """Normalized linear interpolation, taking the short way round. Exact
+    only for the endpoints, but the small rotations it is used for here make
+    its deviation from a true slerp negligible."""
+    q1 = jnp.where(jnp.dot(q0, q1) < 0.0, -q1, q1)
+    q = q0 + t * (q1 - q0)
+    return q / (jnp.linalg.norm(q) + 1e-9)
+
+
 def _capsule_endpoints(model, data, geom_name):
     """World-frame endpoints of a capsule/cylinder geom's axis."""
     gid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, geom_name)
@@ -667,7 +720,7 @@ def init_huarm(model, data, id_dict=None, joint_noise_std=0.0):
 def arm_joint_indices(mj_model, arm_joint_names=ARM_JOINT_NAMES):
     """
     Precomputes, once per model (e.g. at env init), the static index arrays
-    needed by `domain_randomize_jax` / `_set_joint_ctrl_jax` each reset --
+    needed by `utils_dr.domain_randomize` / `set_joint_ctrl_jax` each reset --
     qpos addresses for all arm joints, plus the (actuator id, qpos address)
     pairs for the subset of those joints that are actuated. Passing these in
     as args avoids repeating `mj_name2id`/`joint_to_actuator_id` python
@@ -693,7 +746,7 @@ def arm_joint_indices(mj_model, arm_joint_names=ARM_JOINT_NAMES):
     return qpos_idxs, ctrl_aids, ctrl_qpos_idxs, (act_idxs, act_qpos_idxs)
 
 
-def _set_joint_ctrl_jax(mjx_data, ctrl_aids, ctrl_qpos_idxs, act_idxs=None):
+def set_joint_ctrl_jax(mjx_data, ctrl_aids, ctrl_qpos_idxs, act_idxs=None):
     """
     JAX/MJX counterpart of set_joint_ctrl: sets actuator controls -- and, for
     filtered actuators, their activation state -- to match the current qpos
@@ -707,65 +760,6 @@ def _set_joint_ctrl_jax(mjx_data, ctrl_aids, ctrl_qpos_idxs, act_idxs=None):
         mjx_data = mjx_data.replace(
             act=mjx_data.act.at[idxs].set(mjx_data.qpos[qpos_idxs]))
     return mjx_data
-
-def domain_randomize_jax(mjx_model, mjx_data, rng, erhu_pose_pool,
-                          arm_qpos_idxs, arm_ctrl_aids, arm_ctrl_qpos_idxs,
-                          arm_act_idxs=None,
-                          friction_range=(0.7, 1.3),
-                          mass_range=(0.8, 1.2),
-                          damping_range=(0.8, 1.2),
-                          joint_noise_std=0.0):
-    """Samples this episode's randomized dynamics params -- contact friction,
-    body mass, joint damping.
-
-    `arm_qpos_idxs`, `arm_ctrl_aids`, `arm_ctrl_qpos_idxs`, `arm_act_idxs` are
-    the static index arrays from `arm_joint_indices(mj_model,
-    arm_joint_names)`, precomputed once at env init and passed in here to
-    avoid recomputing them (and the underlying mj_name2id lookups) on every
-    reset.
-
-    `joint_noise_std` now defaults to 0 because the poses drawn from the pool
-    are threaded through a corridor barely 12 mm wide: a few mrad on each
-    joint moves the hair several mm and lifts it straight out of the strings,
-    and nothing here can check for that inside jit. The equivalent jitter is
-    instead applied -- and verified -- while the pool is built, so every entry
-    is a pose known to be threaded (see `build_erhu_pose_pool`)."""
-    friction_rng, mass_rng, damping_rng, pool_rng, joint_rng = jax.random.split(rng, 5)
-
-    friction = mjx_model.geom_friction * jax.random.uniform(
-        friction_rng, mjx_model.geom_friction.shape,
-        minval=friction_range[0], maxval=friction_range[1],
-    )
-    body_mass = mjx_model.body_mass * jax.random.uniform(
-        mass_rng, mjx_model.body_mass.shape,
-        minval=mass_range[0], maxval=mass_range[1],
-    )
-    dof_damping = mjx_model.dof_damping * jax.random.uniform(
-        damping_rng, mjx_model.dof_damping.shape,
-        minval=damping_range[0], maxval=damping_range[1],
-    )
-
-    pose = sample_erhu_pose_pool(erhu_pose_pool, pool_rng)
-    body_pos, body_quat, arm_qpos = pose["body_pos"], pose["body_quat"], pose["arm_qpos"]
-
-    dr_params = dict(
-        geom_friction=friction,
-        body_mass=body_mass,
-        dof_damping=dof_damping,
-        body_pos=body_pos,
-        body_quat=body_quat,
-    )
-    randomized_model = mjx_model.replace(**dr_params)
-
-    if joint_noise_std > 0:
-        arm_qpos = arm_qpos + joint_noise_std * jax.random.normal(joint_rng, arm_qpos.shape)
-
-    mjx_data = mjx_data.replace(qpos=mjx_data.qpos.at[arm_qpos_idxs].set(arm_qpos))
-    mjx_data = mjx.forward(randomized_model, mjx_data)
-    mjx_data = _set_joint_ctrl_jax(mjx_data, arm_ctrl_aids, arm_ctrl_qpos_idxs,
-                                   arm_act_idxs)
-
-    return dr_params, mjx_data
 
 # ==================================================
 
@@ -787,7 +781,7 @@ def build_erhu_pose_pool(mj_model, mjx_model, rng, pool_size,
     retry path almost never fires.
 
     `joint_noise_std` (rad) is the per-episode start-pose jitter, applied here
-    rather than in `domain_randomize_jax` so that each draw can be checked for
+    rather than in `utils_dr.domain_randomize` so that each draw can be checked for
     still being threaded -- see that function.
 
     Returns a dict pytree {"body_pos", "body_quat", "arm_qpos"}, each

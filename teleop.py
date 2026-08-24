@@ -283,11 +283,14 @@ class DemoRecorder:
     replay it through `ErhuEnv.step` later (see `test_demonstration.py`):
     this episode's domain-randomization params (`dr_*` keys -- the dict
     `ErhuEnv.reset` draws into `state.info["dr_params"]`, e.g.
-    friction/mass/damping/erhu placement, fixed for the whole episode) and
-    the exact physics state recording started from (`init_*` keys --
-    `state.pipeline_state`'s qpos/qvel/ctrl/act/time). Both are snapshotted
-    straight off the live `State` passed into `start()` -- public fields
-    only, no reach into `ErhuEnv` internals.
+    friction/mass/damping/erhu placement, fixed for the whole episode), the
+    erhu's slow drift over the episode (`drift_*` keys --
+    `state.info["erhu_drift"]`, the one randomized quantity that is *not*
+    fixed for the episode, see `envs/utils_dr.py`) and the exact physics
+    state recording started from (`init_*` keys -- `state.pipeline_state`'s
+    qpos/qvel/ctrl/act/time). All three are snapshotted straight off the
+    live `State` passed into `start()` -- public fields only, no reach into
+    `ErhuEnv` internals.
     """
 
     def __init__(self, out_dir: Path):
@@ -296,15 +299,19 @@ class DemoRecorder:
         self.active = False
         self._buf = None
         self._dr_params = {}
+        self._erhu_drift = {}
         self._init_state = {}
 
-    def start(self, dr_params=None, pipeline_state=None):
+    def start(self, dr_params=None, pipeline_state=None, erhu_drift=None):
         self._buf = {
             "obs": [], "action": [], "reward": [], "done": [],
             "ee_target": [], "sim_time": [], "wall_time": [],
         }
         self._dr_params = (
             {k: np.asarray(v) for k, v in dr_params.items()} if dr_params is not None else {}
+        )
+        self._erhu_drift = (
+            {k: np.asarray(v) for k, v in erhu_drift.items()} if erhu_drift is not None else {}
         )
         self._init_state = (
             {
@@ -313,6 +320,12 @@ class DemoRecorder:
                 "ctrl": np.asarray(pipeline_state.ctrl),
                 "act": np.asarray(pipeline_state.act),
                 "time": np.asarray(pipeline_state.time),
+                # The solver's warm start is part of the state, not a
+                # derived quantity: seeding it from a different episode's
+                # value perturbs the first solve, and with contact in the
+                # loop that grows into millimetres of divergence within a
+                # dozen steps. Replaying it exactly needs it recorded.
+                "qacc_warmstart": np.asarray(pipeline_state.qacc_warmstart),
             }
             if pipeline_state is not None else {}
         )
@@ -351,6 +364,7 @@ class DemoRecorder:
             sim_time=np.asarray(buf["sim_time"], dtype=np.float32),
             wall_time=np.asarray(buf["wall_time"], dtype=np.float64),
             **{f"dr_{k}": v for k, v in self._dr_params.items()},
+            **{f"drift_{k}": v for k, v in self._erhu_drift.items()},
             **{f"init_{k}": v for k, v in self._init_state.items()},
         )
         print(f"[collect] stopped -- saved {n} steps to {fname}")
@@ -521,10 +535,12 @@ def main():
                             # `collect` in a "held but nothing recording"
                             # limbo that a later collect=false can't save.
                             recorder.stop_and_save()
-                            recorder.start(state.info["dr_params"], state.pipeline_state)
+                            recorder.start(state.info["dr_params"], state.pipeline_state,
+                                           state.info["erhu_drift"])
 
                     if rising_collect:
-                        recorder.start(state.info["dr_params"], state.pipeline_state)
+                        recorder.start(state.info["dr_params"], state.pipeline_state,
+                                       state.info["erhu_drift"])
                     if falling_collect:
                         recorder.stop_and_save()
 
