@@ -39,6 +39,12 @@ scored against its internal scripted trajectory, which the operator is not
 following -- errors against the *commanded* target are logged separately
 under "command/".
 
+Audio: same live erhu synthesis as teleop.py (see synthesis.py) -- the
+policy's bow-hair/string contact force, lateral bow speed and hair position
+drive `ErhuSynth` straight off `state`, so the policy's stroke is heard as
+well as watched. A read-only consumer of `state`; `--no-audio` (or missing
+`dawdreamer`/`sounddevice`/an output device) just runs silently.
+
 Usage:
     python inference.py                                              # ppo, checkpoints/model_latest
     python inference.py --algo sac                                   # sac, checkpoints/sac_model_latest
@@ -73,7 +79,12 @@ from training_interface import Agent
 # phone stream and for BC demo logging; both apply verbatim here, so this
 # reuses them rather than restating the packet plumbing and the (fragile,
 # layout-derived) obs offset in a second place.
-from teleop import UDPReceiver, desired_velocity_obs_idx, patch_desired_velocity_pressure
+from teleop import (
+    UDPReceiver,
+    desired_velocity_obs_idx,
+    make_synth,
+    patch_desired_velocity_pressure,
+)
 from utils import MetricsLogger, print_jp_dict
 
 # Same algo -> (agent class, train_state param key) mapping train.py uses.
@@ -207,6 +218,14 @@ def parse_args() -> argparse.Namespace:
         help="Feed operator commands to the policy raw, instead of clipping them into the "
              "range the scripted reference stroke covered during training (see clip_command).",
     )
+    parser.add_argument(
+        "--no-audio", action="store_true",
+        help="do not synthesize the bow stroke (see synthesis.py)",
+    )
+    parser.add_argument(
+        "--audio-device", default=None,
+        help="sounddevice output device name or index; default is the system default",
+    )
     args = parser.parse_args()
     args.checkpoint = Path(args.checkpoint or DEFAULT_CHECKPOINTS[args.algo]).resolve()
     return args
@@ -227,9 +246,13 @@ def main() -> None:
     state = env.reset(reset_rng)
     model = env.mj_model
     data = mjx.get_data(model, state.pipeline_state)
+    # Where the hair sits along its own length (-1 frog, +1 tip) -- the synth's
+    # bow_x, not in state.metrics -- see teleop.py.
+    _bow_x = jax.jit(env._bow_stroke_position)
 
     metrics_logger = MetricsLogger(live=True)
     deterministic = not args.stochastic
+    synth = make_synth(not args.no_audio, args.audio_device)
 
     # Operator-commanded bow target, held between packet arrivals -- see the
     # module docstring. Seeded from the --init-* args so the policy has a
@@ -289,7 +312,11 @@ def main() -> None:
                     print(f"Action: {action}")
 
                 state = _step(state, action)
+                # Play this step's bow stroke -- read-only, same filtered
+                # force/velocity the metrics below log (see synthesis.py).
+                synth.update_from_state(state, bow_x=float(_bow_x(state.pipeline_state)))
                 if state.done:
+                    synth.update(0.0, 0.0, 0.0)
                     print("\nEpisode terminated")
                     break
                 mjx.get_data_into(data, model, state.pipeline_state)
@@ -315,6 +342,7 @@ def main() -> None:
             print("\nKeyboard interrupt received. Exiting.")
         finally:
             command_receiver.stop()
+            synth.stop()
 
         metrics_logger.plot(args.metrics_path)
         metrics_logger.close()

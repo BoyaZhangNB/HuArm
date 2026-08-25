@@ -53,6 +53,16 @@ Protocol semantics, chosen for demo collection:
     the current episode and pauses stepping until the next `reset`, so a
     stale/garbage physics state is never fed back through IK or logged.
 
+Audio: the bow state this loop produces is also played, live, through the
+erhu physical model in `synthesis.py` -- bow-hair/string contact force,
+lateral bow speed and position along the hair go straight into the model's
+bow pressure / velocity / position, so the operator hears the stroke they
+are making instead of only watching it. It is a read-only consumer of
+`state`: nothing about the physics, the observation vector or the recorded
+demo changes with `--no-audio`, and if `dawdreamer`/`sounddevice` are
+missing or no output device exists, teleop prints why and runs silently
+rather than failing.
+
 UDP is unordered/lossy by nature; only the most recently received position
 packet is ever acted on (zero-order hold between arrivals), and malformed
 datagrams are dropped with a warning rather than crashing the session. TCP
@@ -78,6 +88,7 @@ from mujoco import mjx
 
 from envs.erhu_env import ErhuEnv
 from envs.utils_envs import joint_to_actuator_id
+from synthesis import ErhuSynth
 from utils import jacobian_ik
 
 
@@ -371,6 +382,42 @@ class DemoRecorder:
 
 
 # ---------------------------------------------------------------------------
+# Live audio -- see synthesis.py.
+# ---------------------------------------------------------------------------
+
+class SilentSynth:
+    """Stand-in for `ErhuSynth` when audio is off or unavailable, so the
+    control loop below never has to ask whether sound is on."""
+
+    def update(self, *a, **kw):
+        return None
+
+    def update_from_state(self, *a, **kw):
+        return None
+
+    def stop(self):
+        pass
+
+
+def make_synth(enabled: bool, device=None):
+    """Start the erhu synth, or fall back to `SilentSynth`.
+
+    `dawdreamer`/`sounddevice` are optional dependencies and a headless or
+    device-less machine is a normal thing to run teleop on, so every failure
+    here is reported and swallowed: losing sound must never cost a
+    demonstration."""
+    if not enabled:
+        return SilentSynth()
+    try:
+        synth = ErhuSynth(device=device).start()
+    except Exception as e:  # missing dep, no output device, compile failure
+        print(f"[audio] erhu synthesis off ({type(e).__name__}: {e})")
+        return SilentSynth()
+    print("[audio] erhu synthesis on -- bow force/speed/position are being played")
+    return synth
+
+
+# ---------------------------------------------------------------------------
 
 ARM_JOINT_NAMES = ("joint1", "joint2", "joint5", "joint3", "joint4")
 
@@ -445,6 +492,14 @@ def main():
         "--xml", default="huarm/arm.xml",
         help="path to the MJCF file to load, e.g. huarm/arm.xml or huarm/arm_spring.xml",
     )
+    parser.add_argument(
+        "--no-audio", action="store_true",
+        help="do not synthesize the bow stroke (see synthesis.py)",
+    )
+    parser.add_argument(
+        "--audio-device", default=None,
+        help="sounddevice output device name or index; default is the system default",
+    )
     args = parser.parse_args()
 
     print(f"Using MuJoCo Version: {mujoco.__version__}")
@@ -453,6 +508,10 @@ def main():
     env = ErhuEnv(xml_path=args.xml, episode_time_limit=args.episode_time_limit, dr_pool_size=128)
     _reset = jax.jit(env.reset)
     _step = jax.jit(env.step)
+    # Where the hair sits along its own length (-1 frog, +1 tip). It is not
+    # in `state.metrics`, and it is the only one of the three bow controls
+    # the synth wants that has to be read off the physics directly.
+    _bow_x = jax.jit(env._bow_stroke_position)
 
     model = env.mj_model
     ee_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "end_effector")
@@ -475,6 +534,7 @@ def main():
     control_receiver = TCPReceiver(args.host, args.tcp_port)
     control_receiver.start()
     recorder = DemoRecorder(Path(args.demo_dir))
+    synth = make_synth(not args.no_audio, args.audio_device)
 
     prev_collect = False
     last_ctrl_seq = None  # seq of the last control packet already acted on
@@ -521,6 +581,9 @@ def main():
                         ee_origin = np.array(data.xpos[ee_body_id])
                         pitch_origin = bow_pitch_angle(model, data)
                         awaiting_reset = False
+                        # The arm teleports on reset; without this the synth
+                        # would carry the pre-reset stroke across the cut.
+                        synth.update(0.0, 0.0, 0.0)
                         print(f"\n[reset] new episode, EE origin = {ee_origin}, "
                               f"pitch origin = {pitch_origin:.4f} rad")
                         if collect:
@@ -571,6 +634,14 @@ def main():
                         mjx.get_data_into(data, model, state.pipeline_state)
                         viewer.sync()
 
+                        # Play this step's bow stroke. Read-only: the synth
+                        # takes the same filtered force/velocity the demo
+                        # logs below, so what the operator hears is what the
+                        # recorded episode says the bow did.
+                        synth.update_from_state(
+                            state, bow_x=float(_bow_x(state.pipeline_state))
+                        )
+
                         # Log obs with desired_velocity/desired_pressure
                         # replaced by the expert's actual values this step
                         # (see the BC obs patching block above), not
@@ -588,6 +659,7 @@ def main():
                         )
 
                         if bool(state.done):
+                            synth.update(0.0, 0.0, 0.0)
                             print(f"\n[episode] terminated at sim time {data.time:.3f}")
                             if recorder.active:
                                 recorder.stop_and_save()
@@ -606,6 +678,7 @@ def main():
             print("\nKeyboard interrupt received. Exiting.")
         finally:
             recorder.stop_and_save()
+            synth.stop()
             position_receiver.stop()
             control_receiver.stop()
 

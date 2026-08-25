@@ -16,6 +16,7 @@ metrics.png
 
 *.npz
 demo*.png
+*.wav
 
 # Distribution / packaging
 wake.py
