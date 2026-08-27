@@ -96,7 +96,16 @@ def main(xml_path):
                 with viewer.lock():
                     target_ctrl = data.ctrl.copy()
 
+                # action[-1] (bow_frog_hinge friction-clamp stiffness delta --
+                # see ErhuEnv's action[5] docstring) has no actuator, so
+                # nothing in the viewer's Control panel can drive it. Sending
+                # -1.0 every step pins info["frog_stiffness"] at its 0.0
+                # (loosest) floor -- it starts there already (reset()'s
+                # default), so this just keeps this manual-test loop on the
+                # hinge's old passive-only behavior instead of silently
+                # ramping up friction over time.
                 action = np.zeros(env.action_size, dtype=np.float32)
+                action[-1] = -1.0
                 for aid in arm_actuator_ids:
                     if aid < 0:
                         continue

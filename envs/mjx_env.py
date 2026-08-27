@@ -112,18 +112,31 @@ class MjxEnv(abc.ABC):
         return data
 
     def pipeline_step(
-        self, data: mjx.Data, action: jax.Array, model: Optional[mjx.Model] = None
+        self,
+        data: mjx.Data,
+        action: jax.Array,
+        model: Optional[mjx.Model] = None,
+        extra_qfrc_fn: Optional[Any] = None,
     ) -> mjx.Data:
         """Apply `action` as ctrl and integrate physics for n_frames steps.
 
         `model` defaults to `self.mjx_model`; pass an explicit model (e.g.
         one carried per-episode in `State.info` by domain randomization) to
         step with per-episode-randomized dynamics instead.
+
+        `extra_qfrc_fn`, if given, is a `data -> qfrc` function (shape
+        `(nv,)`) added to `qfrc_applied` before every substep -- e.g. a
+        velocity-dependent force law that a `dof_frictionloss`-style model
+        constraint can't express per-step (see `ErhuEnv.step`'s bow-frog
+        friction). Re-evaluated each substep from that substep's own qvel,
+        not just once per `n_frames`-step call.
         """
         model = self.mjx_model if model is None else model
 
         def substep(d, _):
             d = d.replace(ctrl=action)
+            if extra_qfrc_fn is not None:
+                d = d.replace(qfrc_applied=d.qfrc_applied + extra_qfrc_fn(d))
             return mjx.step(model, d), None
 
         data, _ = jax.lax.scan(substep, data, None, length=self.n_frames)

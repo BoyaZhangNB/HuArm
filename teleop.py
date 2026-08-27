@@ -20,8 +20,10 @@ z), just for that one angle instead of position. Each control step,
 position and that single angle constraint are solved together to arm joint
 angles via damped least-squares IK (reusing `utils.jacobian_ik`,
 the same routine the env's own pose-pool/domain-randomization code uses),
-converted into the env's normalized delta-ctrl action space, and applied through
-`ErhuEnv.step` -- never by poking `data.ctrl` directly -- so the physics,
+converted into the env's normalized delta-ctrl action space (plus a
+bow_frog_hinge stiffness delta, action[5], tracking a fixed target -- see
+--frog-stiffness), and applied through `ErhuEnv.step` -- never by poking
+`data.ctrl` directly -- so the physics,
 reward/termination bookkeeping, and observation vector stay bit-for-bit
 identical to what the trained policy sees. That matters for imitation
 learning: a BC/DAgger policy trained on these demos will be fed the exact
@@ -500,7 +502,18 @@ def main():
         "--audio-device", default=None,
         help="sounddevice output device name or index; default is the system default",
     )
+    parser.add_argument(
+        "--frog-stiffness", type=float, default=0.0,
+        help="target bow_frog_hinge friction-clamp fraction in [0, 1] (see ErhuEnv's "
+             "action[5] docstring), held fixed for the whole session -- the iOS operator app "
+             "has no control surface for it yet. Each step sends whatever action[5] delta "
+             "(scaled by ErhuEnv.max_frog_stiffness_delta) closes the gap toward it, same as "
+             "the arm's target_ctrl -> action conversion below. 0.0 (default) is the loosest "
+             "clamp, i.e. the same passive, damping-only hinge behavior teleop had before this "
+             "action dimension existed; 1.0 is the tightest.",
+    )
     args = parser.parse_args()
+    target_frog_stiffness = float(np.clip(args.frog_stiffness, 0.0, 1.0))
 
     print(f"Using MuJoCo Version: {mujoco.__version__}")
     print(f"Loading MJCF from {args.xml}")
@@ -627,9 +640,21 @@ def main():
                             ctrl_lo, ctrl_hi,
                         )
 
-                        action = np.clip(
+                        arm_action = np.clip(
                             (target_ctrl - prev_ctrl) / env.max_ctrl_delta, -1.0, 1.0
                         )
+                        # action[5]: same delta-toward-target conversion as
+                        # arm_action above, against the fixed
+                        # --frog-stiffness target and ErhuEnv's own tracked
+                        # info["frog_stiffness"] (there's no MuJoCo actuator
+                        # state to read this off, unlike prev_ctrl).
+                        prev_frog_stiffness = float(state.info["frog_stiffness"])
+                        frog_action = np.clip(
+                            (target_frog_stiffness - prev_frog_stiffness)
+                            / env.max_frog_stiffness_delta,
+                            -1.0, 1.0,
+                        )
+                        action = np.concatenate([arm_action, [frog_action]])
                         state = _step(state, jp.asarray(action, dtype=jp.float32))
                         mjx.get_data_into(data, model, state.pipeline_state)
                         viewer.sync()

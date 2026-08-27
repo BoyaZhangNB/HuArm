@@ -5,9 +5,11 @@ A robot arm that plays Erhu
 
 Built by `ErhuEnv._get_obs` (see [erhu_env.py](envs/erhu_env.py)) as a single
 flat vector via `jp.concatenate`, in this order. Dims are for the current
-model (`nq=6`, `nv=6`, `nu=5` (`action_size`), force dim `1`,
-`n_stack=3`), giving a total observation size of **48** (verified via
-`ErhuEnv.observation_size` / `state.obs.shape`).
+model (`nq=6`, `nv=6`, `nu=5`, force dim `1`, `n_stack=3`). `action_size` is
+`nu + 1 = 6` -- the 5 arm ctrl deltas plus a 6th dim that sets
+`bow_frog_hinge`'s friction-clamp stiffness rather than driving an actuator
+(see `ErhuEnv`'s class docstring) -- giving a total observation size of
+**51** (verified via `ErhuEnv.observation_size` / `state.obs.shape`).
 
 The model has 6 joints (`joint1, joint2, joint5, joint3, joint4,
 bow_frog_hinge`), but `bow_frog_hinge` is a passive, unsprung joint with no
@@ -29,9 +31,9 @@ not observed, so `qpos`/`qvel` below are `nq - 1` / `nv - 1`, not `nq`/`nv`.
 | `desired_velocity` | 1 | Target bow velocity |
 | `desired_pressure` | 1 | Target bow pressure |
 | `forbidden_dist` | 1 | Distance to forbidden bowing area |
-| `action_history` | 15 | Last `n_stack=3` actions, flattened (`3 x action_size=5`) |
+| `action_history` | 18 | Last `n_stack=3` actions, flattened (`3 x action_size=6`) |
 | `force_history` | 3 | Last `n_stack=3` force readings as observed (noise included), flattened (`3 x force_dim=1`) -- the newest entry is this step's, so it repeats the `force` slot above |
-| **Total** | **48** | |
+| **Total** | **51** | |
 
 Observation noise is added to the measurement blocks -- `qpos`, `qvel`, the
 five pose blocks and `force`, i.e. the first 27 entries. The reference
