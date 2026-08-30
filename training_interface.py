@@ -203,6 +203,7 @@ def train(
     init_train_state_overrides: Dict[str, Any] = None,
     eval_rng: jax.Array = None,
     eval_max_steps: int = None,
+    checkpoint_fn: Callable[[int, Any, Dict[str, jax.Array]], None] = None,
 ) -> Any:
     """Generic train loop: rollout -> update -> repeat. Swap `agent` to
     swap the entire learning algorithm; nothing else here changes.
@@ -221,6 +222,14 @@ def train(
     has to be big enough for `eval_episodes` episodes to actually finish --
     see `eval`'s `max_steps`, whose default silently truncates a
     16-episode request to whatever fits in 2000 steps.
+
+    `checkpoint_fn`, if given, is called as `checkpoint_fn(it, train_state,
+    eval_metrics)` right after every eval (so on the same cadence as
+    `eval_interval`, not every iteration) -- e.g. to save a checkpoint only
+    when `eval_metrics["reward"]` beats the best seen so far. Left as a
+    caller-supplied hook (rather than baking in a save path/format here)
+    since only the caller knows which key its agent's train_state stores
+    params under and where checkpoints should go.
     """
 
     rng, init_rng, reset_rng = jax.random.split(rng, 3)
@@ -261,6 +270,8 @@ def train(
                 metrics["eval_episode_length"] = eval_metrics["episode_length"]
                 for name, val in eval_metrics["reward_terms"].items():
                     metrics[f"eval_reward_terms/{name}"] = val
+                if checkpoint_fn is not None:
+                    checkpoint_fn(it, train_state, eval_metrics)
 
             log_fn(it, metrics)
     except KeyboardInterrupt:

@@ -133,6 +133,23 @@ def main():
     # catches KeyboardInterrupt internally and returns normally either way).
     last_metrics: dict = {}
 
+    # Track the best eval reward seen so far and, whenever an eval beats it,
+    # save the corresponding params to a dedicated "_best" checkpoint --
+    # separate from the final-iteration checkpoint saved below, so a run
+    # that overfits/collapses late still leaves behind its best policy.
+    best_eval_reward = float("-inf")
+    best_checkpointer = ocp.StandardCheckpointer()
+    best_checkpoint_path = Path(train_cfg["checkpoint_path"]).resolve()
+    best_checkpoint_path = best_checkpoint_path.with_name(best_checkpoint_path.name + "_best")
+
+    def checkpoint_fn(it, train_state, eval_metrics):
+        nonlocal best_eval_reward
+        eval_reward = float(eval_metrics["reward"])
+        if eval_reward > best_eval_reward:
+            best_eval_reward = eval_reward
+            best_checkpointer.save(best_checkpoint_path, train_state[param_key], force=True)
+            print(f"iter {it:3d}  new best eval_reward={eval_reward:.4f} -- saved {best_checkpoint_path}")
+
     def log_fn(it, metrics):
         nonlocal last_metrics
         last_metrics = metrics
@@ -164,7 +181,9 @@ def main():
         # them fits (~3 at num_envs=1 and episode_length=512).
         eval_rng=jax.random.PRNGKey(cfg["seed"] + 1),
         eval_max_steps=train_cfg["eval_episodes"] * episode_length + episode_length,
+        checkpoint_fn=checkpoint_fn,
     )
+    best_checkpointer.wait_until_finished()
     logger.plot(train_cfg["metrics_path"])
     logger.close()
     params = train_state[param_key]
