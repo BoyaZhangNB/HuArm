@@ -10,86 +10,113 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Robot Connection") {
-                    TextField("IP address", text: $viewModel.host)
-                        .keyboardType(.decimalPad)
-                        .autocorrectionDisabled()
-                        .disabled(viewModel.isStreaming)
+            ScrollView {
+                VStack(spacing: Theme.cardSpacing) {
+                    PageHeader(
+                        title: "Arm",
+                        subtitle: "Position + stiffness \u{2192} teleop.py",
+                        statusText: viewModel.isStreaming ? "Streaming" : "Idle",
+                        statusColor: viewModel.isStreaming ? .green : .secondary
+                    )
 
-                    TextField("UDP port", text: $viewModel.port)
-                        .keyboardType(.numberPad)
-                        .disabled(viewModel.isStreaming)
+                    Card(title: "Robot Connection", systemImage: "network") {
+                        VStack(spacing: 10) {
+                            TextField("IP address", text: $viewModel.host)
+                                .keyboardType(.decimalPad)
+                                .autocorrectionDisabled()
+                                .disabled(viewModel.isStreaming)
+                                .fieldStyle()
 
-                    TextField("TCP port", text: $viewModel.tcpPort)
-                        .keyboardType(.numberPad)
-                        .disabled(viewModel.isStreaming)
+                            HStack(spacing: 10) {
+                                TextField("UDP port", text: $viewModel.port)
+                                    .keyboardType(.numberPad)
+                                    .disabled(viewModel.isStreaming)
+                                    .fieldStyle()
 
-                    Button {
-                        viewModel.isStreaming ? viewModel.stopStreaming() : viewModel.startStreaming()
-                    } label: {
-                        Text(viewModel.isStreaming ? "Stop Streaming" : "Start Streaming")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .disabled(!viewModel.isStreaming && !viewModel.canStart)
-                    .tint(viewModel.isStreaming ? .red : .accentColor)
-                }
+                                TextField("TCP port", text: $viewModel.tcpPort)
+                                    .keyboardType(.numberPad)
+                                    .disabled(viewModel.isStreaming)
+                                    .fieldStyle()
+                            }
 
-                Section("Live Position") {
-                    LabeledContent("Tracking") {
-                        Text(viewModel.arManager.trackingStateDescription)
-                            .foregroundStyle(.secondary)
+                            Button {
+                                viewModel.isStreaming ? viewModel.stopStreaming() : viewModel.startStreaming()
+                            } label: {
+                                Text(viewModel.isStreaming ? "Stop Streaming" : "Start Streaming")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!viewModel.isStreaming && !viewModel.canStart)
+                            .tint(viewModel.isStreaming ? .red : .accentColor)
+                        }
                     }
-                    LabeledContent("X") {
-                        Text(format(viewModel.arManager.offsetPosition.x))
+
+                    Card(title: "Live Position", systemImage: "location") {
+                        VStack(spacing: 8) {
+                            MetricRow(label: "Tracking", value: viewModel.arManager.trackingStateDescription)
+                            Divider()
+                            MetricRow(label: "X", value: format(viewModel.arManager.offsetPosition.x))
+                            MetricRow(label: "Y", value: format(viewModel.arManager.offsetPosition.y))
+                            MetricRow(label: "Z", value: format(viewModel.arManager.offsetPosition.z))
+                            if let lastReset = viewModel.lastResetAt {
+                                Divider()
+                                MetricRow(
+                                    label: "Last reset",
+                                    value: lastReset.formatted(date: .omitted, time: .standard),
+                                    valueColor: .secondary
+                                )
+                            }
+                        }
                     }
-                    LabeledContent("Y") {
-                        Text(format(viewModel.arManager.offsetPosition.y))
-                    }
-                    LabeledContent("Z") {
-                        Text(format(viewModel.arManager.offsetPosition.z))
-                    }
-                    if let lastReset = viewModel.lastResetAt {
-                        LabeledContent("Last reset") {
-                            Text(lastReset, style: .time)
+
+                    Card(title: "Stiffness", systemImage: "dial.medium") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Target")
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Text(formatFraction(viewModel.stiffness))
+                                    .monospacedDigit()
+                                    .font(.title3.weight(.semibold))
+                            }
+                            Slider(value: $viewModel.stiffness, in: 0 ... 1)
+                            Text("bow_frog_hinge friction-clamp target: 0 is loosest (passive), 1 is tightest.")
+                                .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
                     }
-                }
-                .monospacedDigit()
 
-                Section("Pitch") {
-                    LabeledContent("Pitch") {
-                        Text(formatDegrees(viewModel.pitch))
-                            .monospacedDigit()
-                    }
-                    Slider(value: $viewModel.pitch, in: -.pi / 2 ... .pi / 2)
-                }
+                    Card(title: "Controls", systemImage: "hand.tap") {
+                        VStack(spacing: 10) {
+                            Button {
+                                viewModel.triggerReset()
+                            } label: {
+                                Label("Reset Origin", systemImage: "arrow.counterclockwise")
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(.indigo)
+                            .disabled(!viewModel.isStreaming)
 
-                Section("Controls") {
-                    Button {
-                        viewModel.triggerReset()
-                    } label: {
-                        Label("Reset Origin", systemImage: "arrow.counterclockwise")
-                            .frame(maxWidth: .infinity)
+                            Button {
+                                viewModel.toggleCollect()
+                            } label: {
+                                Label(
+                                    viewModel.isCollecting ? "Collecting: ON" : "Collecting: OFF",
+                                    systemImage: viewModel.isCollecting ? "record.circle.fill" : "record.circle"
+                                )
+                                .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(viewModel.isCollecting ? .green : .gray)
+                            .disabled(!viewModel.isStreaming)
+                        }
                     }
-                    .disabled(!viewModel.isStreaming)
-
-                    Button {
-                        viewModel.toggleCollect()
-                    } label: {
-                        Label(
-                            viewModel.isCollecting ? "Collecting: ON" : "Collecting: OFF",
-                            systemImage: viewModel.isCollecting ? "record.circle.fill" : "record.circle"
-                        )
-                        .frame(maxWidth: .infinity)
-                    }
-                    .tint(viewModel.isCollecting ? .green : .gray)
-                    .disabled(!viewModel.isStreaming)
                 }
-                .buttonStyle(.borderedProminent)
+                .padding()
             }
-            .navigationTitle("Teleop Arm")
+            .background(Color(.systemGroupedBackground))
+            .navigationBarHidden(true)
         }
     }
 
@@ -97,8 +124,8 @@ struct ContentView: View {
         String(format: "% .3f m", value)
     }
 
-    private func formatDegrees(_ radians: Double) -> String {
-        String(format: "% .1f°", radians * 180 / .pi)
+    private func formatFraction(_ value: Double) -> String {
+        String(format: "%.2f", value)
     }
 }
 

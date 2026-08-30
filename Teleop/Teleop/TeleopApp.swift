@@ -28,6 +28,7 @@ struct TeleopApp: App {
                         Label("Bow", systemImage: "slider.horizontal.3")
                     }
             }
+            .tint(.indigo)
         }
     }
 }

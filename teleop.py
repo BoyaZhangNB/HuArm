@@ -4,7 +4,7 @@ Position and control now arrive over two separate sockets/transports, mirroring
 the two structs on the operator (Swift) side:
 
     PositionPacket (UDP, unordered/lossy, one-shot datagrams):
-        {"x": float, "y": float, "z": float, "pitch": float}
+        {"x": float, "y": float, "z": float, "stiffness": float}
 
     ControlPacket (TCP, ordered/reliable, newline-delimited JSON stream):
         {"reset": bool, "collect": bool}
@@ -12,17 +12,16 @@ the two structs on the operator (Swift) side:
 (x, y, z) is a desired end-effector displacement *relative to the EE
 position at the moment `reset` last went true* -- not an absolute world
 coordinate, since the operator has no reason to know the arm's base frame.
-`pitch` is the only orientation DOF the iOS app exposes (yaw/roll were
-dropped there): a delta, in radians, from the angle between the ground and
-joint3_body's own link (see `PITCH_BODY`/`PITCH_BODY_LOCAL_DIR`) *at the
-moment `reset` last fired* -- same relative-to-origin convention as (x, y,
-z), just for that one angle instead of position. Each control step,
-position and that single angle constraint are solved together to arm joint
-angles via damped least-squares IK (reusing `utils.jacobian_ik`,
-the same routine the env's own pose-pool/domain-randomization code uses),
-converted into the env's normalized delta-ctrl action space (plus a
-bow_frog_hinge stiffness delta, action[5], tracking a fixed target -- see
---frog-stiffness), and applied through `ErhuEnv.step` -- never by poking
+`stiffness` is the bow_frog_hinge friction-clamp target the iOS app exposes,
+a [0, 1] fraction (0 = loosest/passive, 1 = tightest, see ErhuEnv's action[5]
+docstring) sent as an absolute target rather than a delta-from-origin --
+unlike (x, y, z) there is no "origin" for it to be relative to. Each control
+step, (x, y, z) is solved via damped least-squares IK (reusing
+`utils.jacobian_ik`, the same routine the env's own pose-pool/domain-
+randomization code uses) into arm joint angles, converted into the env's
+normalized delta-ctrl action space (plus a bow_frog_hinge stiffness delta,
+action[5], tracking `stiffness` as its target -- see `solve_ik`/action[5]
+handling below), and applied through `ErhuEnv.step` -- never by poking
 `data.ctrl` directly -- so the physics,
 reward/termination bookkeeping, and observation vector stay bit-for-bit
 identical to what the trained policy sees. That matters for imitation
@@ -127,7 +126,7 @@ class UDPReceiver(threading.Thread):
             "x": float(pkt["x"]),
             "y": float(pkt["y"]),
             "z": float(pkt["z"]),
-            "pitch": float(pkt["pitch"]),
+            "stiffness": float(pkt["stiffness"]),
         }
 
     def run(self):
@@ -423,36 +422,12 @@ def make_synth(enabled: bool, device=None):
 
 ARM_JOINT_NAMES = ("joint1", "joint2", "joint5", "joint3", "joint4")
 
-# joint3_body's own geom runs from its origin to local (-0.30, 0, 0) (see
-# arm.xml) -- i.e. local -X is that link's long axis, the one PITCH_BODY's
-# angle-to-ground constraint below tracks.
-PITCH_BODY = "joint3_body"
-PITCH_BODY_LOCAL_DIR = np.array([-1.0, 0.0, 0.0])
 
-
-def bow_pitch_angle(model, data) -> float:
-    """Current angle (radians) between PITCH_BODY_LOCAL_DIR (rotated to
-    world) and the ground plane -- the same quantity `jacobian_ik`'s angle
-    constraint tracks, computed directly off live sim data so the teleop
-    loop can re-zero its delta origin on every reset."""
-    bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, PITCH_BODY)
-    xmat = np.array(data.xmat[bid]).reshape(3, 3)
-    u = xmat @ PITCH_BODY_LOCAL_DIR
-    return float(np.arcsin(np.clip(u[2], -1.0, 1.0)))
-
-
-def solve_ik(model, ik_data, current_qpos, target_world_pos, prev_ctrl, target_pitch=None):
+def solve_ik(model, ik_data, current_qpos, target_world_pos, prev_ctrl):
     """Damped-least-squares IK for the arm's 5 joints, warm-started from
     `current_qpos` (the arm's current live pose) so each call only has to
     correct a small per-step delta -- fast enough for a real-time control
     loop.
-
-    `target_pitch` (radians), when given, is solved for simultaneously with
-    position as one extra scalar constraint: the angle between
-    `PITCH_BODY`'s link (joint3_body's own geom) and the ground plane (see
-    `jacobian_ik`'s angle_body/target_angle args) -- position accuracy is not
-    traded away for it since both error terms are driven to zero by the same
-    least-squares solve, just weighted against each other.
 
     Returns a full ctrl-shaped vector of target joint angles, scattered by
     actuator id (so it does not depend on ARM_JOINT_NAMES happening to be in
@@ -463,9 +438,6 @@ def solve_ik(model, ik_data, current_qpos, target_world_pos, prev_ctrl, target_p
     jacobian_ik(
         model, ik_data, body_points, target_world_pos, list(ARM_JOINT_NAMES),
         max_iters=20, damping=1e-2, step_clip=0.05, tol=1e-4,
-        angle_body=PITCH_BODY if target_pitch is not None else None,
-        angle_local_dir=PITCH_BODY_LOCAL_DIR,
-        target_angle=target_pitch,
     )
     target_ctrl = np.array(prev_ctrl, dtype=np.float64)
     for jn in ARM_JOINT_NAMES:
@@ -502,18 +474,7 @@ def main():
         "--audio-device", default=None,
         help="sounddevice output device name or index; default is the system default",
     )
-    parser.add_argument(
-        "--frog-stiffness", type=float, default=0.0,
-        help="target bow_frog_hinge friction-clamp fraction in [0, 1] (see ErhuEnv's "
-             "action[5] docstring), held fixed for the whole session -- the iOS operator app "
-             "has no control surface for it yet. Each step sends whatever action[5] delta "
-             "(scaled by ErhuEnv.max_frog_stiffness_delta) closes the gap toward it, same as "
-             "the arm's target_ctrl -> action conversion below. 0.0 (default) is the loosest "
-             "clamp, i.e. the same passive, damping-only hinge behavior teleop had before this "
-             "action dimension existed; 1.0 is the tightest.",
-    )
     args = parser.parse_args()
-    target_frog_stiffness = float(np.clip(args.frog_stiffness, 0.0, 1.0))
 
     print(f"Using MuJoCo Version: {mujoco.__version__}")
     print(f"Loading MJCF from {args.xml}")
@@ -539,7 +500,6 @@ def main():
     data = mjx.get_data(model, state.pipeline_state)
 
     ee_origin = np.array(data.xpos[ee_body_id])
-    pitch_origin = bow_pitch_angle(model, data)
     awaiting_reset = False  # true once an episode has ended, until the next reset edge
 
     position_receiver = UDPReceiver(args.host, args.udp_port)
@@ -592,13 +552,11 @@ def main():
                         state = _reset(sub)
                         mjx.get_data_into(data, model, state.pipeline_state)
                         ee_origin = np.array(data.xpos[ee_body_id])
-                        pitch_origin = bow_pitch_angle(model, data)
                         awaiting_reset = False
                         # The arm teleports on reset; without this the synth
                         # would carry the pre-reset stroke across the cut.
                         synth.update(0.0, 0.0, 0.0)
-                        print(f"\n[reset] new episode, EE origin = {ee_origin}, "
-                              f"pitch origin = {pitch_origin:.4f} rad")
+                        print(f"\n[reset] new episode, EE origin = {ee_origin}")
                         if collect:
                             # `collect` is still held -- treat reset as an
                             # episode boundary, not the end of the session.
@@ -626,17 +584,10 @@ def main():
                         ) / 1.5
                         target = ee_origin + offset
 
-                        # Operator pitch is a delta from PITCH_BODY's angle
-                        # at the last reset (pitch_origin), same
-                        # relative-to-origin convention as the position
-                        # offset above -- so the absolute target handed to
-                        # the IK's angle constraint is the two summed.
-                        target_pitch = pitch_origin + pkt["pitch"]
-
                         prev_ctrl = np.array(state.pipeline_state.ctrl)
                         current_qpos = np.array(state.pipeline_state.qpos)
                         target_ctrl = np.clip(
-                            solve_ik(model, ik_data, current_qpos, target, prev_ctrl, target_pitch),
+                            solve_ik(model, ik_data, current_qpos, target, prev_ctrl),
                             ctrl_lo, ctrl_hi,
                         )
 
@@ -644,10 +595,13 @@ def main():
                             (target_ctrl - prev_ctrl) / env.max_ctrl_delta, -1.0, 1.0
                         )
                         # action[5]: same delta-toward-target conversion as
-                        # arm_action above, against the fixed
-                        # --frog-stiffness target and ErhuEnv's own tracked
-                        # info["frog_stiffness"] (there's no MuJoCo actuator
-                        # state to read this off, unlike prev_ctrl).
+                        # arm_action above, against the operator's live
+                        # `stiffness` target (an absolute [0, 1] fraction,
+                        # not a delta-from-origin like x/y/z) and ErhuEnv's
+                        # own tracked info["frog_stiffness"] (there's no
+                        # MuJoCo actuator state to read this off, unlike
+                        # prev_ctrl).
+                        target_frog_stiffness = float(np.clip(pkt["stiffness"], 0.0, 1.0))
                         prev_frog_stiffness = float(state.info["frog_stiffness"])
                         frog_action = np.clip(
                             (target_frog_stiffness - prev_frog_stiffness)
