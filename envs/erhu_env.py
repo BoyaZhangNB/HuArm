@@ -154,7 +154,7 @@ class ErhuEnv(MjxEnv):
         traj_accel_max: float = 0.05, # (m/s)^2, upper bound on `a_bar` -- see utils_traj._fit_quartic.
         traj_margin: float = 0.02, # normalized bow-position margin that triggers sampling a new reference segment.
         frog_frictionloss_min: float = 0.0, # N*m, friction torque scale on bow_frog_hinge at frog_stiffness fraction = 0 (loosest clamp).
-        frog_frictionloss_max: float = 0.3, # N*m, at frog_stiffness fraction = 1 (tightest clamp). Gravity's own torque on the
+        frog_frictionloss_max: float = 0.05, # N*m, at frog_stiffness fraction = 1 (tightest clamp). Gravity's own torque on the
                                              # hinge tops out around 0.05 N*m (see utils_envs.frog_hinge_gravity for
                                              # a given pose) and damping alone is 0.05 N*m*s/rad, so this range spans
                                              # "barely more resistance than today's passive hinge" to "several times

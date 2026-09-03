@@ -353,7 +353,8 @@ def _closest_between_lines(p0, u, q0, v):
 def bow_insertion_residual(model, data, gap, hair_span=(0.3, 0.7),
                            tol_offset=0.004, tol_axis=0.30, tol_span=0.15,
                            tol_height=0.015, tol_clear=0.002,
-                           clearance_margin=0.004, pairs=CLEARANCE_PAIRS):
+                           clearance_margin=0.004, pairs=CLEARANCE_PAIRS,
+                           outward_dir=(-1.0, 1.0, 0.0), tol_outward=0.1):
     """
     Residual vector whose zero is a threaded bow. Every entry is divided by
     that constraint's own tolerance, so each reads as "how many times its
@@ -368,8 +369,18 @@ def bow_insertion_residual(model, data, gap, hair_span=(0.3, 0.7),
             through the corridor instead of skewing along it
       [5]   how far the contact point has slid outside `hair_span`
       [6]   how far the bowing height has slid outside `gap["heights"]`
-      [7:]  how far each pair in `pairs` is inside `clearance_margin` of
+      [7:-1] how far each pair in `pairs` is inside `clearance_margin` of
             touching, and zero once it is clear
+      [-1]  how far the hair/stick axis (world frame) points away from
+            `outward_dir` -- zero when it is exactly aligned. This is a soft
+            tie-breaker, not a real constraint: threading leaves a whole
+            one-parameter family of arm poses free (see `solve_bow_insertion`),
+            and nothing else in this residual says which member of that
+            family to prefer. `tol_outward` is deliberately loose compared to
+            `tol_axis` so this term only nudges the solve towards angling the
+            bow outward (from world +Y towards +X) among otherwise-equal
+            solutions, rather than fighting the hard bands above for a pose
+            that isn't actually reachable.
 
     Terms [3:7] are the tolerances a human exploits when threading a bow by
     hand, which is why they are bands rather than targets: the bow may cross
@@ -388,6 +399,7 @@ def bow_insertion_residual(model, data, gap, hair_span=(0.3, 0.7),
         h0, axis, gap["bottom"], gap["string_axis"])
 
     intrusion = np.minimum(bow_clearance(model, data, pairs) - clearance_margin, 0.0)
+    outward = 1.0 - float(axis @ _unit(np.asarray(outward_dir, dtype=float)))
 
     return np.concatenate([
         offset / tol_offset,
@@ -396,6 +408,7 @@ def bow_insertion_residual(model, data, gap, hair_span=(0.3, 0.7),
         [_band_excess(s / length, *hair_span) / tol_span],
         [_band_excess(height, *gap["heights"]) / tol_height],
         intrusion / tol_clear,
+        [outward / tol_outward],
     ])
 
 
