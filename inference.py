@@ -235,7 +235,7 @@ def main() -> None:
     args = parse_args()
     print(f"Using MuJoCo Version: {mujoco.__version__}")
 
-    env = ErhuEnv(xml_path=args.xml, episode_time_limit=args.episode_time_limit, dr_pool_size=128)
+    env = ErhuEnv(xml_path=args.xml, episode_time_limit=args.episode_time_limit, dr_pool_size=32)
     agent = build_agent(args.algo, env.observation_size, env.action_size)
 
     print(f"Loading {args.algo} checkpoint from {args.checkpoint}...")

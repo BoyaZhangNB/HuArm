@@ -8,7 +8,7 @@ from .mjx_env import MjxEnv, State
 from .utils_envs import (
     arm_joint_indices, build_erhu_pose_pool, mat_to_quat, quat_conj, quat_mul,
 )
-from . import utils_dr, utils_noise, utils_traj
+from . import utils_dr, utils_noise, utils_traj, utils_traj_simple
 
 from typing import Any, Dict, Tuple
 
@@ -18,22 +18,41 @@ def _get_contact(data: mjx.Data):
     impl = getattr(data, "_impl", None)
     return impl.contact if impl is not None else data.contact
 
+# ---------------------------------------------------------------------------
+# Thin switchboard over the two interchangeable scripted-reference backends,
+# `utils_traj` (quartic profile over bow *position*) and `utils_traj_simple`
+# (sine wave over *time*) -- see their module docstrings. Each wrapper below
+# takes the union of both backends' arguments and forwards to whichever one
+# is active; swapping backends is just commenting/uncommenting the one
+# `return` line in each wrapper, instead of touching every call site.
+# ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Placeholders -- goal generation and forbidden-volume query.
-#
-# TODO: at inference time these are meant to be replaced by real sensing:
-#   - desired_velocity_and_pressure(): motion-capture + pressure-sensor
-#     readings of a reference bow stroke.
-#   - forbidden_area_distance(): a computer-vision estimate of the erhu /
-#     keep-out region location, converted to a signed distance.
-# For now both are pure functions of (model, data) that ignore their inputs
-# and return fixed placeholder values, so the surrounding reward/termination/
-# obs code has a stable interface to build against.
-# ---------------------------------------------------------------------------
+def init_traj_info(
+    rng: jax.Array, x0: jax.Array, v_limit: float, p_min: float, p_max: float,
+    accel_range: Tuple[float, float], period_range: Tuple[float, float],
+) -> Dict[str, jax.Array]:
+    return utils_traj_simple.init_traj_info(rng, p_min, p_max, period_range)
+    # return utils_traj.init_traj_info(rng, x0, v_limit, p_min, p_max, accel_range)
+
+
+def query_traj(
+    info: Dict[str, Any], t: jax.Array, x: jax.Array,
+    v_limit: jax.Array, p_min: jax.Array, p_max: jax.Array,
+) -> Tuple[jax.Array, jax.Array]:
+    # return utils_traj_simple.query_traj(info, t, v_limit, p_min, p_max)
+    return utils_traj.query_traj(info, x, v_limit, p_min, p_max)
+
+
+def maybe_resample_traj(
+    info: Dict[str, Any], x: jax.Array, v_limit: float, p_min: float, p_max: float,
+    accel_range: Tuple[float, float], margin: float,
+) -> Dict[str, Any]:
+    # return info
+    return utils_traj.maybe_resample(info, x, v_limit, p_min, p_max, accel_range, margin=margin)
+
 
 def desired_velocity_and_pressure(
-    info: Dict[str, Any], x: jax.Array, v_limit: jax.Array, p_min: jax.Array, p_max: jax.Array
+    data, info: Dict[str, Any], x: jax.Array, v_limit: jax.Array, p_min: jax.Array, p_max: jax.Array
 ) -> Tuple[jax.Array, jax.Array]:
     """Returns (desired lateral bow velocity, target pressure in N).
 
@@ -43,13 +62,13 @@ def desired_velocity_and_pressure(
     indicating stroke direction (e.g. push vs. pull) relative to the erhu,
     independent of the erhu's world pose.
 
-    Both values are read off a scripted reference bow stroke -- a quartic
-    speed/pressure profile over the bow's own normalized position `x` --
-    evaluated at `x`, the *real, measured* bow position (see
-    `ErhuEnv._bow_stroke_position`), against the segment shape carried in
-    `info["traj_*"]`; see `utils_traj`.
+    Both values are read off a scripted reference bow stroke, evaluated
+    against the per-episode state carried in `info["traj_*"]` -- see
+    `query_traj` above for which backend is active. `data.time` and `x`
+    (the real, measured bow position -- see `ErhuEnv._bow_stroke_position`)
+    are each used by one backend and ignored by the other.
     """
-    return utils_traj.query_traj(info, x, v_limit, p_min, p_max)
+    return query_traj(info, data.time, x, v_limit, p_min, p_max)
 
 
 def forbidden_area_distance(mjx_model: mjx.Model, data: mjx.Data) -> jax.Array:
@@ -153,6 +172,8 @@ class ErhuEnv(MjxEnv):
         traj_accel_min: float = 0.005, # (m/s)^2, lower bound on the sampled velocity-profile curvature target `a_bar`.
         traj_accel_max: float = 0.05, # (m/s)^2, upper bound on `a_bar` -- see utils_traj._fit_quartic.
         traj_margin: float = 0.02, # normalized bow-position margin that triggers sampling a new reference segment.
+        traj_period_min: float = 1.0, # s, lower bound on the sampled sine-wave period -- see utils_traj_simple.
+        traj_period_max: float = 6.0, # s, upper bound on the sampled sine-wave period.
         frog_frictionloss_min: float = 0.0, # N*m, friction torque scale on bow_frog_hinge at frog_stiffness fraction = 0 (loosest clamp).
         frog_frictionloss_max: float = 0.05, # N*m, at frog_stiffness fraction = 1 (tightest clamp). Gravity's own torque on the
                                              # hinge tops out around 0.05 N*m (see utils_envs.frog_hinge_gravity for
@@ -210,6 +231,7 @@ class ErhuEnv(MjxEnv):
         self.traj_p_max = traj_p_max
         self.traj_accel_range = (traj_accel_min, traj_accel_max)
         self.traj_margin = traj_margin
+        self.traj_period_range = (traj_period_min, traj_period_max)
         self.frog_frictionloss_min = frog_frictionloss_min
         self.frog_frictionloss_max = frog_frictionloss_max
         self.frog_friction_v_eps = frog_friction_v_eps
@@ -493,16 +515,13 @@ class ErhuEnv(MjxEnv):
             "contact_steps": jp.asarray(0.0),
             "bow_a_force_ema": jp.asarray(0.0),
             "bow_vel_ema": jp.asarray(0.0),
-            # Scripted reference bow-stroke state (quartic speed/pressure
-            # profile over normalized bow position) -- see `utils_traj`.
-            # Seeded from the bow's real measured position (not a fixed
-            # 0.0) so the first segment starts where the arm's randomized
-            # pose actually put the bow -- the dr pool only admits poses
-            # verified "threaded between the strings", so this should
-            # already land close to centre.
-            **utils_traj.init_traj_info(
+            # Scripted reference bow-stroke state, seeded from the bow's
+            # real measured position -- see `init_traj_info` above for
+            # which backend is active.
+            **init_traj_info(
                 traj_rng, self._bow_stroke_position(data), self.traj_v_limit,
                 self.traj_p_min, self.traj_p_max, self.traj_accel_range,
+                self.traj_period_range,
             ),
             # This step's observation noise, plus the rng and pink-noise
             # state behind it -- see `utils_noise` and `_get_obs`.
@@ -550,7 +569,7 @@ class ErhuEnv(MjxEnv):
 
         bow_x = self._bow_stroke_position(data)
         desired_velocity, desired_pressure = desired_velocity_and_pressure(
-            info, bow_x, self.traj_v_limit, self.traj_p_min, self.traj_p_max
+            data, info, bow_x, self.traj_v_limit, self.traj_p_min, self.traj_p_max
         )
         forbidden_dist = forbidden_area_distance(model, data)
 
@@ -623,7 +642,7 @@ class ErhuEnv(MjxEnv):
 
         bow_x = self._bow_stroke_position(data)
         desired_velocity, desired_pressure = desired_velocity_and_pressure(
-            info, bow_x, self.traj_v_limit, self.traj_p_min, self.traj_p_max
+            data, info, bow_x, self.traj_v_limit, self.traj_p_min, self.traj_p_max
         )
         forbidden_dist = forbidden_area_distance(model, data)
 
@@ -834,13 +853,14 @@ class ErhuEnv(MjxEnv):
 
         # Resample the scripted reference stroke's segment for next step,
         # once the bow's real position has come within `traj_margin` of
-        # the current target -- see `utils_traj.maybe_resample`. `bow_x` is
-        # a stateless function of `data` alone, so `_get_obs` above and
+        # the current target -- a no-op unless the position-based backend
+        # is active, see `maybe_resample_traj` above. `bow_x` is a
+        # stateless function of `data` alone, so `_get_obs` above and
         # `_step_kinematics` earlier necessarily agreed on it regardless of
         # ordering; this is kept after `obs` only to preserve "this step's
         # outputs come from this step's segment, then advance for next
         # step" as an easy invariant to reason about.
-        info = utils_traj.maybe_resample(
+        info = maybe_resample_traj(
             info, k["bow_x"],
             self.traj_v_limit, self.traj_p_min, self.traj_p_max,
             self.traj_accel_range, margin=self.traj_margin,
