@@ -39,16 +39,16 @@ def query_traj(
     info: Dict[str, Any], t: jax.Array, x: jax.Array,
     v_limit: jax.Array, p_min: jax.Array, p_max: jax.Array,
 ) -> Tuple[jax.Array, jax.Array]:
-    # return utils_traj_simple.query_traj(info, t, v_limit, p_min, p_max)
-    return utils_traj.query_traj(info, x, v_limit, p_min, p_max)
+    return utils_traj_simple.query_traj(info, t, v_limit, p_min, p_max)
+    # return utils_traj.query_traj(info, x, v_limit, p_min, p_max)
 
 
 def maybe_resample_traj(
     info: Dict[str, Any], x: jax.Array, v_limit: float, p_min: float, p_max: float,
     accel_range: Tuple[float, float], margin: float,
 ) -> Dict[str, Any]:
-    # return info
-    return utils_traj.maybe_resample(info, x, v_limit, p_min, p_max, accel_range, margin=margin)
+    return info
+    # return utils_traj.maybe_resample(info, x, v_limit, p_min, p_max, accel_range, margin=margin)
 
 
 def desired_velocity_and_pressure(
@@ -166,13 +166,13 @@ class ErhuEnv(MjxEnv):
         contact_steps_decay: float = 5.0, # steps of `contact_steps` lost per non-contact step, instead of an instant reset to 0.
         velocity_kernel_scale: float = 100.0, # corresopnd to accpetable error of 0.01 [m/s].
         pressure_kernel_scale: float = 10.0, # corresopnd to accpetable error of 0.1 [N].
-        traj_v_limit: float = 0.1, # m/s, symmetric cap on the scripted reference velocity -- see utils_traj.
+        traj_v_limit: float = 0.05, # m/s, symmetric cap on the scripted reference velocity -- see utils_traj.
         traj_p_min: float = 0.5, # N, lower bound used only when sampling a profile's interior control points.
         traj_p_max: float = 3, # N, cap on the scripted reference pressure (kept under f_safe).
         traj_accel_min: float = 0.005, # (m/s)^2, lower bound on the sampled velocity-profile curvature target `a_bar`.
         traj_accel_max: float = 0.05, # (m/s)^2, upper bound on `a_bar` -- see utils_traj._fit_quartic.
         traj_margin: float = 0.02, # normalized bow-position margin that triggers sampling a new reference segment.
-        traj_period_min: float = 1.0, # s, lower bound on the sampled sine-wave period -- see utils_traj_simple.
+        traj_period_min: float = 4.0, # s, lower bound on the sampled sine-wave period -- see utils_traj_simple.
         traj_period_max: float = 6.0, # s, upper bound on the sampled sine-wave period.
         frog_frictionloss_min: float = 0.0, # N*m, friction torque scale on bow_frog_hinge at frog_stiffness fraction = 0 (loosest clamp).
         frog_frictionloss_max: float = 0.05, # N*m, at frog_stiffness fraction = 1 (tightest clamp). Gravity's own torque on the

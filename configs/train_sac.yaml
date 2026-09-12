@@ -43,5 +43,5 @@ train:
   eval_interval: 10
   eval_episodes: 16
   live_plot: false
-  metrics_path: metrics_sac.png
-  checkpoint_path: checkpoints/sac_model_latest
+  metrics_path: metrics_sac_traj.png
+  checkpoint_path: checkpoints/sac_model_traj

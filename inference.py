@@ -34,6 +34,11 @@ Values are held between arrivals and clipped into the range the policy was
 trained on (`--no-clip-command` to send raw values); until the first packet
 arrives the policy is fed `--init-velocity`/`--init-pressure`.
 
+This UDP-command path is the default (`--teleop`); with `--no-teleop` no
+socket is opened at all and the policy instead chases the env's own scripted
+desired_velocity/desired_pressure (already baked into state.obs by
+`ErhuEnv._get_obs`), unmodified -- same target distribution as training.
+
 Note the env's own `state.metrics` velocity_error/pressure_error stay
 scored against its internal scripted trajectory, which the operator is not
 following -- errors against the *commanded* target are logged separately
@@ -199,11 +204,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--verbose", action="store_true", help="Print the raw action vector every step.",
     )
+    parser.add_argument(
+        "--teleop", action=argparse.BooleanOptionalAction, default=True,
+        help="If set (default), chase the operator's phone-streamed CommandPackets over UDP "
+             "(--command-host/--command-port), held between arrivals as before. If "
+             "--no-teleop, ignore the command socket entirely and feed the policy the env's "
+             "own scripted desired_velocity/desired_pressure (already baked into state.obs by "
+             "ErhuEnv._get_obs) unmodified, same as during training.",
+    )
     parser.add_argument("--command-host", default="0.0.0.0", help="Bind address for the command socket.")
     parser.add_argument(
         "--command-port", type=int, default=5007,
         help="UDP port the operator streams CommandPackets to (default: 5007; teleop.py's "
-             "5005/5006 are left free so a teleop session can run alongside).",
+             "5005/5006 are left free so a teleop session can run alongside). Unused with "
+             "--no-teleop.",
     )
     parser.add_argument(
         "--init-velocity", type=float, default=0.0,
@@ -261,11 +275,16 @@ def main() -> None:
     command_velocity, command_pressure = args.init_velocity, args.init_pressure
     if args.clip_command:
         command_velocity, command_pressure = clip_command(env, command_velocity, command_pressure)
-    command_receiver = CommandReceiver(args.command_host, args.command_port, label="command")
-    command_receiver.start()
-    print(f"Listening for UDP command packets on {args.command_host}:{args.command_port} "
-          f"(velocity, pressure); holding "
-          f"v={command_velocity:.4f} m/s, p={command_pressure:.3f} N until the first arrives.")
+    command_receiver = None
+    if args.teleop:
+        command_receiver = CommandReceiver(args.command_host, args.command_port, label="command")
+        command_receiver.start()
+        print(f"Listening for UDP command packets on {args.command_host}:{args.command_port} "
+              f"(velocity, pressure); holding "
+              f"v={command_velocity:.4f} m/s, p={command_pressure:.3f} N until the first arrives.")
+    else:
+        print("--no-teleop: feeding the policy the env's own scripted "
+              "desired_velocity/desired_pressure instead of an operator command.")
 
     _step = jax.jit(env.step)
     # Warm up the jit before the viewer opens so the first real step doesn't
@@ -280,6 +299,9 @@ def main() -> None:
         start = time.time()
         next_log = 0.0
 
+        begin = input("Press Enter to start the simulation and begin logging metrics...")
+
+
         try:
             while viewer.is_running():
                 elapsed_real = time.time() - start
@@ -290,22 +312,32 @@ def main() -> None:
                     time.sleep(0.01)
                     continue
 
-                # Zero-order hold on the operator's stream: only the newest
-                # datagram is ever acted on, and the last one stays in force
-                # until another lands (or forever, if the phone goes quiet).
-                cmd = command_receiver.get_latest()
-                if cmd is not None:
-                    command_velocity, command_pressure = cmd["velocity"], cmd["pressure"]
-                    if args.clip_command:
-                        command_velocity, command_pressure = clip_command(
-                            env, command_velocity, command_pressure
-                        )
+                if args.teleop:
+                    # Zero-order hold on the operator's stream: only the newest
+                    # datagram is ever acted on, and the last one stays in force
+                    # until another lands (or forever, if the phone goes quiet).
+                    cmd = command_receiver.get_latest()
+                    if cmd is not None:
+                        command_velocity, command_pressure = cmd["velocity"], cmd["pressure"]
+                        if args.clip_command:
+                            command_velocity, command_pressure = clip_command(
+                                env, command_velocity, command_pressure
+                            )
 
-                # Swap the env's scripted desired velocity/pressure for the
-                # operator's, so the policy chases the hand-set target.
-                obs = patch_desired_velocity_pressure(
-                    state.obs, desired_vp_idx, command_velocity, command_pressure
-                )
+                    # Swap the env's scripted desired velocity/pressure for the
+                    # operator's, so the policy chases the hand-set target.
+                    obs = patch_desired_velocity_pressure(
+                        state.obs, desired_vp_idx, command_velocity, command_pressure
+                    )
+                else:
+                    # No operator: feed the policy state.obs unmodified, so it
+                    # chases the env's own scripted desired_velocity/desired_pressure
+                    # (already baked in by ErhuEnv._get_obs) exactly as in training.
+                    # Pull the same two slots back out purely for the "cmd" print
+                    # and the command/* metrics logged below.
+                    obs = state.obs
+                    command_velocity = float(obs[desired_vp_idx])
+                    command_pressure = float(obs[desired_vp_idx + 1])
                 rng, act_rng = jax.random.split(rng)
                 action, _ = agent.act(train_state, obs, act_rng, deterministic=deterministic)
                 if args.verbose:
@@ -335,13 +367,14 @@ def main() -> None:
                         "velocity_error": state.metrics["bow_vel_ema"] - command_velocity,
                         "pressure_error": state.metrics["bow_a_force_ema"] - command_pressure,
                     }
-                    print_jp_dict(metrics)
+                    # print_jp_dict(metrics)
                     metrics_logger.log(data.time, metrics)
 
         except KeyboardInterrupt:
             print("\nKeyboard interrupt received. Exiting.")
         finally:
-            command_receiver.stop()
+            if command_receiver is not None:
+                command_receiver.stop()
             synth.stop()
 
         metrics_logger.plot(args.metrics_path)
