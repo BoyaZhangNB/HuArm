@@ -128,7 +128,9 @@ class ErhuEnv(MjxEnv):
     fraction carried in `info["frog_stiffness"]`, since -- unlike the arm's
     ctrl target -- there's no MuJoCo actuator state to hold it between steps)
     scaled by `max_frog_stiffness_delta` and clamped to [0, 1], mirroring how
-    `max_ctrl_delta` and `actuator_ctrlrange` work for action[:5]. That
+    `max_ctrl_delta` and `actuator_ctrlrange` work for action[:5]. The
+    current fraction is part of the observation (see `_get_obs`), so the
+    policy always sees the state its delta acts on. That
     fraction maps linearly onto a friction torque scale in
     [`frog_frictionloss_min`, `frog_frictionloss_max`] N*m, applied as a
     `-scale * tanh(qvel / frog_friction_v_eps)` torque on that one dof, every
@@ -580,6 +582,11 @@ class ErhuEnv(MjxEnv):
             jp.reshape(force, (1,)),
             jp.reshape(desired_velocity, (1,)), jp.reshape(desired_pressure, (1,)),
             jp.reshape(forbidden_dist, (1,)),
+            # Current clamp fraction that action[5] is a delta on -- without
+            # it the policy can't know the state its stiffness action
+            # integrates (MDP property). Exact, not noised: it's a commanded
+            # state the controller knows, like action_history.
+            jp.reshape(info["frog_stiffness"], (1,)),
             info["action_history"].reshape(-1),
             info["force_history"].reshape(-1),
         ])

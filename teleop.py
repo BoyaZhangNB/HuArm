@@ -262,7 +262,7 @@ def desired_velocity_obs_idx(model) -> int:
     rel_quat(4), frog_rel(3), tip_rel(3), mid_rel(3), force(1) -- a
     uni-directional scalar, the raw sensor force projected onto the arm's
     last-link axis, see ErhuEnv._axial_force -- [desired_velocity,
-    desired_pressure], forbidden_dist, ... -- update this if that layout
+    desired_pressure], forbidden_dist, frog_stiffness, ... -- update this if that layout
     ever changes."""
     return (model.nq - 1) + (model.nv - 1) + 3 + 4 + 3 + 3 + 3 + 1
 
