@@ -4,12 +4,14 @@
 
     <default>
         <default class="arm">
-            <joint damping="0.5"/>
+            <!-- The position bound that ctrlrange gave under position
+                 control; velocity ctrl no longer bounds it. -->
+            <joint damping="0.5" range="-3.14 3.14"/>
             <geom type="capsule"
                 rgba="0.2 0.5 0.8 1"
                 density="1000"
                 size="0.02" contype="0" conaffinity="0"/>
-            <position kp="5000" ctrlrange="-3.14 3.14"/>
+            <velocity kv="30" ctrlrange="-2 2"/>
         </default>
 
         <default class="bow_hair">
@@ -151,34 +153,40 @@
     </worldbody>
 
     <actuator>
-        <!-- Position actuators with a first-order "filter" activation state:
-             ctrl is low-pass filtered (time constant dynprm[0]) into the
-             actual PD target, so a step change in ctrl ramps the arm toward
-             its new setpoint over tens of ms instead of snapping there in a
-             fraction of a millisecond. gainprm/biasprm reproduce a standard
-             position actuator (force = kp*(act-qpos) - kv*qvel); kv is
-             retuned per joint to critical damping at that joint's measured
-             effective inertia (kp fixed at 5000 for all joints). -->
-        <general joint="joint1" ctrllimited="true" ctrlrange="-3.14 3.14" forcerange="-8 8"
+        <!-- Joint-space velocity actuators with a first-order "filter"
+             activation state: ctrl is a joint velocity target (rad/s),
+             low-pass filtered (time constant dynprm[0], standing in for
+             actuation delay) into act, and the servo pushes qvel toward it:
+             force = kv*(act - qvel), i.e. gainprm[0] = kv, biasprm[2] = -kv.
+             There is no position term, so a zero command does not hold a
+             pose gravity/contact load sags the joint at load/kv rad/s
+             and the policy has to close the position loop itself.
+
+             kv is per joint, set as high as it goes before the servo
+             saturates into a forcerange bang-bang limit cycle (coupled
+             through the passive bow_frog_hinge) on a 1-2 rad/s step, with
+             margin for utils_dr's +15% gain randomization: joint2/5/4
+             chatter from kv~50, joint1/3 are clean past 80. -->
+        <general joint="joint1" ctrllimited="true" ctrlrange="-2 2" forcerange="-8 8"
                  dyntype="filter" dynprm="0.05 0 0"
-                 gaintype="fixed" gainprm="5000 0 0"
-                 biastype="affine" biasprm="0 -5000 -55"/>
-        <general joint="joint2" ctrllimited="true" ctrlrange="-3.14 3.14" forcerange="-4 4"
+                 gaintype="fixed" gainprm="80 0 0"
+                 biastype="affine" biasprm="0 0 -80"/>
+        <general joint="joint2" ctrllimited="true" ctrlrange="-2 2" forcerange="-4 4"
                  dyntype="filter" dynprm="0.05 0 0"
-                 gaintype="fixed" gainprm="5000 0 0"
-                 biastype="affine" biasprm="0 -5000 -38"/>
-        <general joint="joint5" ctrllimited="true" ctrlrange="-3.14 3.14" forcerange="-2 2"
+                 gaintype="fixed" gainprm="30 0 0"
+                 biastype="affine" biasprm="0 0 -30"/>
+        <general joint="joint5" ctrllimited="true" ctrlrange="-2 2" forcerange="-2 2"
                  dyntype="filter" dynprm="0.03 0 0"
-                 gaintype="fixed" gainprm="5000 0 0"
-                 biastype="affine" biasprm="0 -5000 -50"/>
-        <general joint="joint3" ctrllimited="true" ctrlrange="-3.14 3.14" forcerange="-3 3"
+                 gaintype="fixed" gainprm="30 0 0"
+                 biastype="affine" biasprm="0 0 -30"/>
+        <general joint="joint3" ctrllimited="true" ctrlrange="-2 2" forcerange="-3 3"
                  dyntype="filter" dynprm="0.04 0 0"
-                 gaintype="fixed" gainprm="5000 0 0"
-                 biastype="affine" biasprm="0 -5000 -34"/>
-        <general joint="joint4" ctrllimited="true" ctrlrange="-3.14 3.14" forcerange="-1 1"
+                 gaintype="fixed" gainprm="80 0 0"
+                 biastype="affine" biasprm="0 0 -80"/>
+        <general joint="joint4" ctrllimited="true" ctrlrange="-2 2" forcerange="-1 1"
                  dyntype="filter" dynprm="0.03 0 0"
-                 gaintype="fixed" gainprm="5000 0 0"
-                 biastype="affine" biasprm="0 -5000 -12"/>
+                 gaintype="fixed" gainprm="30 0 0"
+                 biastype="affine" biasprm="0 0 -30"/>
     </actuator>
 
     <include file="erhu.xml"/>

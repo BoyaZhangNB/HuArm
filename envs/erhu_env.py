@@ -107,12 +107,15 @@ DEFAULT_OBS_NOISE = {
 class ErhuEnv(MjxEnv):
     """Erhu bowing task for the HuArm robot. n_frames is frame_skip.
 
-    Action space: normalized delta on the 5 arm position actuators
-    (joint1, joint2, joint5, joint3, joint4 -- actuator order), i.e.
-    action[:5] in [-1, 1]^5 scaled by `max_ctrl_delta`
-    (radians) and added to the previous actuator target each step.
+    Action space: joint-space velocity control. action[:5] in [-1, 1]^5 is a
+    normalized joint velocity command for the 5 arm velocity actuators
+    (joint1, joint2, joint5, joint3, joint4 -- actuator order), scaled by
+    `max_joint_vel` (rad/s) and written to ctrl as an absolute target each
+    step -- not a delta on the previous one. The actuators (see arm.xml)
+    have no position term, so a zero command does not hold a pose against
+    gravity or string load; the policy closes the position loop itself.
 
-    ctrl target is clamped to `mjx_model.actuator_ctrlrange` each step.
+    ctrl is clamped to `mjx_model.actuator_ctrlrange` each step.
 
     action[5] is a 6th, independent dimension that sets the bow_frog_hinge's
     stiffness rather than driving a position target. The hinge itself stays
@@ -123,14 +126,14 @@ class ErhuEnv(MjxEnv):
     both to break the joint loose from rest and to keep it sliding once
     moving.
 
-    Like the arm dims, action[5] is a normalized *delta*, not an absolute
+    Unlike the arm dims, action[5] is a normalized *delta*, not an absolute
     target: it's added to the previous step's clamp position (a [0, 1]
-    fraction carried in `info["frog_stiffness"]`, since -- unlike the arm's
-    ctrl target -- there's no MuJoCo actuator state to hold it between steps)
-    scaled by `max_frog_stiffness_delta` and clamped to [0, 1], mirroring how
-    `max_ctrl_delta` and `actuator_ctrlrange` work for action[:5]. The
-    current fraction is part of the observation (see `_get_obs`), so the
-    policy always sees the state its delta acts on. That
+    fraction carried in `info["frog_stiffness"]`, since there's no MuJoCo
+    actuator state to hold it between steps) scaled by
+    `max_frog_stiffness_delta` and clamped to [0, 1] -- i.e. a clamp-rate
+    command, the analogue of action[:5]'s velocity command. The current
+    fraction is part of the observation (see `_get_obs`), so the policy
+    always sees the state its delta acts on. That
     fraction maps linearly onto a friction torque scale in
     [`frog_frictionloss_min`, `frog_frictionloss_max`] N*m, applied as a
     `-scale * tanh(qvel / frog_friction_v_eps)` torque on that one dof, every
@@ -156,7 +159,8 @@ class ErhuEnv(MjxEnv):
         n_frames: int = 20, # timestep 0.002 * 20 = 0.04s per step, 25Hz
         n_stack: int = 3,
         enable_forbidden_zone: bool = True,
-        max_ctrl_delta: float = 0.05,
+        max_joint_vel: float = 1.25, # rad/s at |action| = 1 -- the old position-delta setup's 0.05 rad per
+                                     # 0.04 s step, so old normalized actions map 1:1 onto velocity commands.
         episode_time_limit: float = 100.0,
         f_max: float = 10.0,
         f_safe: float = 3.0,
@@ -185,7 +189,7 @@ class ErhuEnv(MjxEnv):
         frog_friction_v_eps: float = 0.05, # rad/s, velocity scale of the static/sliding transition -- see the class
                                             # docstring's action[5] paragraph.
         max_frog_stiffness_delta: float = 0.03, # max per-step change in the [0, 1] clamp fraction -- action[5]'s
-                                                 # analogue of `max_ctrl_delta`. At the default, a full loose->tight
+                                                 # analogue of `max_joint_vel`. At the default, a full loose->tight
                                                  # sweep takes 20 steps (0.8s at 25Hz).
         frog_stiffness_init: float = 0.0, # [0, 1] clamp fraction the episode starts at (info["frog_stiffness"] in
                                            # `reset`) -- 0.0 (loosest) matches the hinge's old, feature-free passive
@@ -216,7 +220,7 @@ class ErhuEnv(MjxEnv):
 
         self.n_stack = n_stack
         self.enable_forbidden_zone = enable_forbidden_zone
-        self.max_ctrl_delta = max_ctrl_delta
+        self.max_joint_vel = max_joint_vel
         self.episode_time_limit = episode_time_limit
         self.f_max = f_max
         self.f_safe = f_safe
@@ -350,7 +354,7 @@ class ErhuEnv(MjxEnv):
     # ------------------------------------------------------------------
     @property
     def action_size(self) -> int:
-        """5 arm ctrl deltas + 1 bow_frog_hinge stiffness dim -- see the
+        """5 arm joint velocities + 1 bow_frog_hinge stiffness dim -- see the
         class docstring. One more than `mjx_model.nu`: the stiffness dim
         drives an explicit friction torque in `step` rather than a MuJoCo
         actuator, so it has no slot in `actuator_ctrlrange`."""
@@ -775,13 +779,11 @@ class ErhuEnv(MjxEnv):
 
         arm_action, stiffness_action = action[:-1], action[-1]
 
-        ctrl = jp.clip(
-            prev_data.ctrl + arm_action * self.max_ctrl_delta, self._ctrl_lo, self._ctrl_hi
-        )
+        # Absolute joint velocity command (rad/s) -- see the class docstring.
+        ctrl = jp.clip(arm_action * self.max_joint_vel, self._ctrl_lo, self._ctrl_hi)
 
         # stiffness_action in [-1, 1] is a delta on the clamp fraction
-        # (info["frog_stiffness"]), exactly like arm_action is a delta on
-        # ctrl -- see the class docstring. That fraction maps linearly onto
+        # (info["frog_stiffness"]) -- see the class docstring. That fraction maps linearly onto
         # a friction torque scale on bow_frog_hinge in
         # [frog_frictionloss_min, frog_frictionloss_max] N*m, standing in
         # for how hard the frog's clamp plates are pressed together this

@@ -268,11 +268,9 @@ def jacobian_ik(model, data, body_points, target_pos, joint_names,
 
     joint_names may include unactuated joints (e.g. the passive bow_frog_hinge)
     as extra free DOFs for the solver to use -- their qpos gets solved for and
-    written just like any actuated joint, it just never gets copied into ctrl
-    (see envs.utils_envs.set_joint_ctrl). Joints with hard limits (jnt_limited)
-    are clamped to model.jnt_range after every step so the solver can't swing
-    them past their physical stops; unlimited joints (e.g. joint1..5) are
-    unaffected.
+    written just like any actuated joint. Joints with hard limits (jnt_limited,
+    e.g. joint1..5 and the frog hinge) are clamped to model.jnt_range after
+    every step so the solver can't swing them past their physical stops.
 
     Passing `target_angle` (radians) together with `angle_body` and
     `angle_local_dir` (a 3-vector fixed in `angle_body`'s local frame, not

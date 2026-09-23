@@ -19,7 +19,8 @@ unlike (x, y, z) there is no "origin" for it to be relative to. Each control
 step, (x, y, z) is solved via damped least-squares IK (reusing
 `utils.jacobian_ik`, the same routine the env's own pose-pool/domain-
 randomization code uses) into arm joint angles, converted into the env's
-normalized delta-ctrl action space (plus a bow_frog_hinge stiffness delta,
+normalized joint-velocity action space -- the velocity that closes the gap
+from the current pose in one env step (plus a bow_frog_hinge stiffness delta,
 action[5], tracking `stiffness` as its target -- see `solve_ik`/action[5]
 handling below), and applied through `ErhuEnv.step` -- never by poking
 `data.ctrl` directly -- so the physics,
@@ -423,30 +424,33 @@ def make_synth(enabled: bool, device=None):
 ARM_JOINT_NAMES = ("joint1", "joint2", "joint5", "joint3", "joint4")
 
 
-def solve_ik(model, ik_data, current_qpos, target_world_pos, prev_ctrl):
+def solve_ik(model, ik_data, current_qpos, target_world_pos):
     """Damped-least-squares IK for the arm's 5 joints, warm-started from
     `current_qpos` (the arm's current live pose) so each call only has to
     correct a small per-step delta -- fast enough for a real-time control
     loop.
 
-    Returns a full ctrl-shaped vector of target joint angles, scattered by
-    actuator id (so it does not depend on ARM_JOINT_NAMES happening to be in
-    the same order as the model's actuators); any actuator not driven by one
-    of ARM_JOINT_NAMES keeps its previous target from `prev_ctrl`."""
+    Returns a ctrl-shaped (nu,) pair of (target, current) joint angles,
+    scattered by actuator id (so it does not depend on ARM_JOINT_NAMES
+    happening to be in the same order as the model's actuators); any
+    actuator not driven by one of ARM_JOINT_NAMES gets target == current,
+    i.e. a zero velocity command."""
     ik_data.qpos[:] = current_qpos
     body_points = [("end_effector", np.zeros(3), 1.0)]
     jacobian_ik(
         model, ik_data, body_points, target_world_pos, list(ARM_JOINT_NAMES),
         max_iters=20, damping=1e-2, step_clip=0.05, tol=1e-4,
     )
-    target_ctrl = np.array(prev_ctrl, dtype=np.float64)
+    target_q = np.zeros(model.nu)
+    current_q = np.zeros(model.nu)
     for jn in ARM_JOINT_NAMES:
         aid = joint_to_actuator_id(model, jn)
         if aid < 0:
             continue
-        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn)
-        target_ctrl[aid] = ik_data.qpos[model.jnt_qposadr[jid]]
-    return target_ctrl
+        adr = model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn)]
+        target_q[aid] = ik_data.qpos[adr]
+        current_q[aid] = current_qpos[adr]
+    return target_q, current_q
 
 
 def main():
@@ -489,8 +493,6 @@ def main():
 
     model = env.mj_model
     ee_body_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "end_effector")
-    ctrl_lo = np.array(model.actuator_ctrlrange[:, 0])
-    ctrl_hi = np.array(model.actuator_ctrlrange[:, 1])
     ik_data = mujoco.MjData(model)  # scratch data for jacobian_ik; never touched by the viewer
     desired_vp_idx = desired_velocity_obs_idx(model)  # see patch_desired_velocity_pressure
 
@@ -584,23 +586,20 @@ def main():
                         ) / 1.5
                         target = ee_origin + offset
 
-                        prev_ctrl = np.array(state.pipeline_state.ctrl)
                         current_qpos = np.array(state.pipeline_state.qpos)
-                        target_ctrl = np.clip(
-                            solve_ik(model, ik_data, current_qpos, target, prev_ctrl),
-                            ctrl_lo, ctrl_hi,
-                        )
+                        target_q, current_q = solve_ik(model, ik_data, current_qpos, target)
 
+                        # Joint velocity that reaches the IK solution in one
+                        # env step, normalized by the env's velocity scale.
                         arm_action = np.clip(
-                            (target_ctrl - prev_ctrl) / env.max_ctrl_delta, -1.0, 1.0
+                            (target_q - current_q) / env.dt / env.max_joint_vel, -1.0, 1.0
                         )
-                        # action[5]: same delta-toward-target conversion as
-                        # arm_action above, against the operator's live
-                        # `stiffness` target (an absolute [0, 1] fraction,
-                        # not a delta-from-origin like x/y/z) and ErhuEnv's
-                        # own tracked info["frog_stiffness"] (there's no
-                        # MuJoCo actuator state to read this off, unlike
-                        # prev_ctrl).
+                        # action[5]: delta-toward-target conversion against
+                        # the operator's live `stiffness` target (an absolute
+                        # [0, 1] fraction, not a delta-from-origin like
+                        # x/y/z) and ErhuEnv's own tracked
+                        # info["frog_stiffness"] (there's no MuJoCo actuator
+                        # state to read this off).
                         target_frog_stiffness = float(np.clip(pkt["stiffness"], 0.0, 1.0))
                         prev_frog_stiffness = float(state.info["frog_stiffness"])
                         frog_action = np.clip(

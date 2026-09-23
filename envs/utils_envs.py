@@ -58,22 +58,20 @@ def between_strings_target(model, data):
 
 def set_joint_ctrl(model, data, joint_names):
     """
-    Sets actuator controls to match the current qpos for selected joints.
+    Zeroes the velocity command for selected joints' actuators, so the arm
+    starts at rest in the pose it was just placed in.
 
-    The arm's actuators are `dyntype="filter"`, so what the PD law actually
-    tracks is the activation state, not ctrl -- and that state starts at zero.
-    Setting ctrl alone would leave every actuator pulling towards qpos = 0 for
-    the ~50 ms the filter takes to catch up, which is more than enough to drag
-    the bow out of the strings, so the activation is seeded to match.
+    The arm's velocity actuators are `dyntype="filter"`, so what the servo
+    actually tracks is the activation state, not ctrl -- zeroed as well, so
+    no stale velocity target left over in `data` bleeds into the new pose.
     """
     for jn in joint_names:
-        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn)
         aid = joint_to_actuator_id(model, jn)
         if aid >= 0:
-            data.ctrl[aid] = data.qpos[model.jnt_qposadr[jid]]
+            data.ctrl[aid] = 0.0
             act_adr = model.actuator_actadr[aid]
             if act_adr >= 0:
-                data.act[act_adr] = data.ctrl[aid]
+                data.act[act_adr] = 0.0
 
 
 def joint_to_actuator_id(model, joint_name):
@@ -108,9 +106,9 @@ def joint_to_actuator_id(model, joint_name):
 #   * it has no notion of the bow colliding with anything, and the bowing
 #     point is only ~1 cm above the sound box, so the stick routinely ends up
 #     a millimetre or two inside it.
-#   * joint1..5 are unlimited revolutes while their actuators are ctrllimited
-#     to [-3.14, 3.14], so it can return a pose that is kinematically right
-#     and physically uncommandable (see `_joint_addressing`).
+#   * joint1..5 are limited to [-3.14, 3.14], but plain position IK does not
+#     respect that, so it can return a pose that is kinematically right and
+#     physically unreachable (see `_joint_addressing`).
 #
 # `solve_bow_insertion` below drives a full insertion residual instead -- hair
 # line through the corridor, hair square to the strings, contact point
@@ -507,27 +505,26 @@ def bow_insertion_status(model, data, gap=None, clearance=0.0015,
     return st
 
 
-def _joint_addressing(model, joint_names, respect_ctrlrange=True):
+def _joint_addressing(model, joint_names):
     """
     qpos addresses and the box each joint may be solved inside.
 
-    joint1..5 are unlimited revolutes, so nothing stops a solver from walking
-    one of them a few turns away -- kinematically identical, but the actuators
-    are ctrllimited to [-3.14, 3.14], so `set_joint_ctrl` would then command a
-    pose the arm swings right out of. The box is therefore the joint's own
-    range intersected with what its actuator can actually hold.
+    Nothing else stops a solver from walking a revolute joint a few turns
+    away -- kinematically identical, but outside the [-3.14, 3.14] range
+    joint1..5 are limited to in arm.xml, so the joint-limit constraint would
+    shove the arm right out of the solved pose. The box is therefore each
+    joint's own range (unbounded for unlimited joints).
+
+    (Under position control this also intersected each joint's actuator
+    ctrlrange; with velocity actuators ctrlrange is in rad/s, not a pose.)
     """
     jids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn) for jn in joint_names]
     qpos_idxs = np.array([model.jnt_qposadr[jid] for jid in jids])
 
     lo, hi = [], []
-    for jid, jn in zip(jids, joint_names):
+    for jid in jids:
         j_lo, j_hi = ((model.jnt_range[jid][0], model.jnt_range[jid][1])
                       if model.jnt_limited[jid] else (-np.inf, np.inf))
-        aid = joint_to_actuator_id(model, jn) if respect_ctrlrange else -1
-        if aid >= 0 and model.actuator_ctrllimited[aid]:
-            j_lo = max(j_lo, model.actuator_ctrlrange[aid][0])
-            j_hi = min(j_hi, model.actuator_ctrlrange[aid][1])
         lo.append(j_lo)
         hi.append(j_hi)
     return qpos_idxs, np.array(lo), np.array(hi)
@@ -543,8 +540,7 @@ def solve_bow_insertion(model, data, arm_joint_names=ARM_JOINT_NAMES, q_init=Non
     Damped Gauss-Newton (Levenberg-Marquardt) with a numerical Jacobian, over
     the five actuated arm joints and the passive frog hinge -- the hinge sets
     which way the bow points about its own mount, so the threading needs it,
-    and it is bounded by its own limits while the arm joints are bounded by
-    what their actuators can command (`_joint_addressing`).
+    and every joint is bounded by its own range (`_joint_addressing`).
 
     The residual is smooth but its zero set is neither unique nor always
     reachable, so each solve is verified with `bow_insertion_status` and
@@ -700,8 +696,8 @@ def insert_hair_between_strings(model, data, arm_joint_names=ARM_JOINT_NAMES,
                                 joint_noise_std=0.0, rng=None, verbose=True,
                                 **solver_kwargs):
     """
-    Places the bow so its hair is threaded between the erhu strings, and bakes
-    the resulting pose into the actuator targets so the arm holds it.
+    Places the bow so its hair is threaded between the erhu strings, and
+    zeroes the arm's velocity commands so it starts there at rest.
 
     See `solve_bow_insertion` for the solve itself and `bow_insertion_status`
     for what "threaded" is checked to mean. `joint_noise_std` (rad) jitters
@@ -734,9 +730,9 @@ def arm_joint_indices(mj_model, arm_joint_names=ARM_JOINT_NAMES):
     """
     Precomputes, once per model (e.g. at env init), the static index arrays
     needed by `utils_dr.domain_randomize` / `set_joint_ctrl_jax` each reset --
-    qpos addresses for all arm joints, plus the (actuator id, qpos address)
-    pairs for the subset of those joints that are actuated. Passing these in
-    as args avoids repeating `mj_name2id`/`joint_to_actuator_id` python
+    qpos addresses for all arm joints, plus the actuator ids and activation
+    addresses of the subset of those joints that are actuated. Passing these
+    in as args avoids repeating `mj_name2id`/`joint_to_actuator_id` python
     lookups on every call.
     """
     jids = [mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_JOINT, jn) for jn in arm_joint_names]
@@ -744,34 +740,27 @@ def arm_joint_indices(mj_model, arm_joint_names=ARM_JOINT_NAMES):
 
     aids = [joint_to_actuator_id(mj_model, jn) for jn in arm_joint_names]
     ctrl_aids = jnp.asarray([a for a in aids if a >= 0], dtype=jnp.int32)
-    ctrl_qpos_idxs = jnp.asarray(
-        [mj_model.jnt_qposadr[jid] for jid, a in zip(jids, aids) if a >= 0]
-    )
     # Activation addresses for the subset of those actuators that have an
-    # activation state (the arm's are dyntype="filter"), so a reset can seed
-    # it -- see `set_joint_ctrl` for why leaving it at zero pulls the arm off
-    # the pose it was just placed in.
-    act_pairs = [(mj_model.actuator_actadr[a], mj_model.jnt_qposadr[jid])
-                 for jid, a in zip(jids, aids)
-                 if a >= 0 and mj_model.actuator_actadr[a] >= 0]
-    act_idxs = jnp.asarray([p[0] for p in act_pairs], dtype=jnp.int32)
-    act_qpos_idxs = jnp.asarray([p[1] for p in act_pairs])
-    return qpos_idxs, ctrl_aids, ctrl_qpos_idxs, (act_idxs, act_qpos_idxs)
+    # activation state (the arm's are dyntype="filter"), so a reset can zero
+    # it -- see `set_joint_ctrl`.
+    act_idxs = jnp.asarray(
+        [mj_model.actuator_actadr[a] for a in aids
+         if a >= 0 and mj_model.actuator_actadr[a] >= 0],
+        dtype=jnp.int32,
+    )
+    return qpos_idxs, ctrl_aids, act_idxs
 
 
-def set_joint_ctrl_jax(mjx_data, ctrl_aids, ctrl_qpos_idxs, act_idxs=None):
+def set_joint_ctrl_jax(mjx_data, ctrl_aids, act_idxs=None):
     """
-    JAX/MJX counterpart of set_joint_ctrl: sets actuator controls -- and, for
-    filtered actuators, their activation state -- to match the current qpos
-    for selected joints, given their precomputed index arrays (see
+    JAX/MJX counterpart of set_joint_ctrl: zeroes the velocity command -- and,
+    for filtered actuators, their activation state -- of selected joints'
+    actuators, given their precomputed index arrays (see
     `arm_joint_indices`).
     """
-    ctrl = mjx_data.ctrl.at[ctrl_aids].set(mjx_data.qpos[ctrl_qpos_idxs])
-    mjx_data = mjx_data.replace(ctrl=ctrl)
+    mjx_data = mjx_data.replace(ctrl=mjx_data.ctrl.at[ctrl_aids].set(0.0))
     if act_idxs is not None:
-        idxs, qpos_idxs = act_idxs
-        mjx_data = mjx_data.replace(
-            act=mjx_data.act.at[idxs].set(mjx_data.qpos[qpos_idxs]))
+        mjx_data = mjx_data.replace(act=mjx_data.act.at[act_idxs].set(0.0))
     return mjx_data
 
 # ==================================================

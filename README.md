@@ -6,7 +6,8 @@ A robot arm that plays Erhu
 Built by `ErhuEnv._get_obs` (see [erhu_env.py](envs/erhu_env.py)) as a single
 flat vector via `jp.concatenate`, in this order. Dims are for the current
 model (`nq=6`, `nv=6`, `nu=5`, force dim `1`, `n_stack=3`). `action_size` is
-`nu + 1 = 6` -- the 5 arm ctrl deltas plus a 6th dim that sets
+`nu + 1 = 6` -- the 5 arm joint velocity commands (joint-space velocity
+control, scaled by `max_joint_vel`) plus a 6th dim that sets
 `bow_frog_hinge`'s friction-clamp stiffness rather than driving an actuator
 (see `ErhuEnv`'s class docstring) -- giving a total observation size of
 **52** (verified via `ErhuEnv.observation_size` / `state.obs.shape`).
@@ -58,7 +59,7 @@ episode in `state.info["dr_params"]` and merged onto the base model by
 | What | How |
 |---|---|
 | Bow weight | One factor for the whole bow assembly (mass and inertia together), on top of the per-body mass jitter applied to the rest of the model |
-| Actuator params | Position-actuator gains `kp`/`kv` and the first-order filter time constant that stands in for actuation delay, per actuator |
+| Actuator params | Velocity-actuator gain `kv` and the first-order filter time constant that stands in for actuation delay, per actuator |
 | Erhu placement | Drawn from the pre-solved pose pool (`utils_envs.build_erhu_pose_pool`), then drifted slowly across the episode: a cylinder is drawn around the instrument, one point sampled on each end cap, and the erhu walks toward the pose that best fits its top/bottom centres to them |
 | Bow placement | Start pose comes with the drawn pool entry; the reference stroke it is scored against is resampled continuously by [utils_traj.py](envs/utils_traj.py) |
 | Contact params | `solref` (time constant, damping ratio) and `solimp` (`d0`, `d1`, width) on the bow-hair/string pairs only -- the contact that is the task; every other contact in the scene is a backstop the bow should never reach |

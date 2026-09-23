@@ -33,7 +33,7 @@ def _listen_for_reset_key(reset_event):
 def main(xml_path):
     print(f"Using MuJoCo Version: {mujoco.__version__}")
 
-    env = ErhuEnv(episode_time_limit=1000, max_ctrl_delta=0.05, f_safe=3, f_max=30, dr_pool_size=128, dr_pool_seed=420)
+    env = ErhuEnv(episode_time_limit=1000, max_joint_vel=1.25, f_safe=3, f_max=30, dr_pool_size=128, dr_pool_seed=420)
     state = env.reset(jax.random.PRNGKey(0))
     print(f"Environment reset.")
     model = env.mj_model
@@ -41,7 +41,7 @@ def main(xml_path):
 
     # Map each arm joint to the actuator that drives it, so slider edits made
     # in the viewer's own Control panel (which write straight into
-    # data.ctrl) can be translated into per-actuator delta actions.
+    # data.ctrl, in rad/s) can be translated into normalized velocity actions.
     arm_actuator_ids = [joint_to_actuator_id(model, jn) for jn in ARM_JOINT_NAMES]
 
     log_print_interval = 0.5
@@ -55,7 +55,6 @@ def main(xml_path):
     # Fill the same MjData object the viewer was launched with, rather than
     # rebinding `data` to a new object mujoco.viewer never sees.
     mjx.get_data_into(data, model, state.pipeline_state)
-    sim_ctrl = data.ctrl.copy()  # viewer writes directly into data.ctrl on its own thread
 
     # TEMPORARY: background thread that sets reset_event whenever Enter is
     # pressed in the terminal, so the main loop below can reset the env.
@@ -67,7 +66,8 @@ def main(xml_path):
     with mujoco.viewer.launch_passive(model, data) as viewer:
         viewer.sync()
         print("Teleoperation loop running. Press ESC in viewer to exit.")
-        print("Drag the actuator sliders in the viewer's Control panel to command the arm.")
+        print("Drag the actuator sliders in the viewer's Control panel to command joint velocities")
+        print("(a slider left off zero keeps the joint moving; 'Clear all' stops the arm).")
         start = time.time()
         try:
             while viewer.is_running():
@@ -77,7 +77,6 @@ def main(xml_path):
                     state = env.reset(jax.random.PRNGKey(20 + reset_key_counter[0]))
                     state = _step(state, jp.zeros(env.action_size))
                     mjx.get_data_into(data, model, state.pipeline_state)
-                    sim_ctrl = data.ctrl.copy()
                     viewer.sync()
                     start = time.time()
                     print("\nEnvironment reset (manual).")
@@ -91,8 +90,8 @@ def main(xml_path):
 
                 # The viewer writes any Control-panel slider drags directly into
                 # data.ctrl on its own thread, so grab a consistent snapshot
-                # under the viewer's lock before comparing it against what the
-                # sim is actually holding (sim_ctrl) to get the user's command.
+                # under the viewer's lock -- it's the user's joint velocity
+                # command (rad/s), held until the slider moves again.
                 with viewer.lock():
                     target_ctrl = data.ctrl.copy()
 
@@ -109,8 +108,7 @@ def main(xml_path):
                 for aid in arm_actuator_ids:
                     if aid < 0:
                         continue
-                    delta = target_ctrl[aid] - sim_ctrl[aid]
-                    action[aid] = np.clip(delta / env.max_ctrl_delta, -1.0, 1.0)
+                    action[aid] = np.clip(target_ctrl[aid] / env.max_joint_vel, -1.0, 1.0)
 
                 state = _step(state, jp.asarray(action))
 
@@ -126,7 +124,6 @@ def main(xml_path):
                     metrics_logger.close()
                     exit(0)
                 mjx.get_data_into(data, model, state.pipeline_state)
-                sim_ctrl = data.ctrl.copy()
 
                 viewer.sync()
 
