@@ -38,5 +38,5 @@ train:
   eval_interval: 20
   eval_episodes: 16
   live_plot: false
-  metrics_path: metrics_sac_simp_traj.png
-  checkpoint_path: checkpoints/sac_model_simp_traj
+  metrics_path: metrics_sac_vel_ctrl.png
+  checkpoint_path: checkpoints/sac_model_vel_ctrl

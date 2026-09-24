@@ -172,7 +172,7 @@ class ErhuEnv(MjxEnv):
         contact_steps_decay: float = 5.0, # steps of `contact_steps` lost per non-contact step, instead of an instant reset to 0.
         velocity_kernel_scale: float = 100.0, # corresopnd to accpetable error of 0.01 [m/s].
         pressure_kernel_scale: float = 10.0, # corresopnd to accpetable error of 0.1 [N].
-        traj_v_limit: float = 0.05, # m/s, symmetric cap on the scripted reference velocity -- see utils_traj.
+        traj_v_limit: float = 0.1, # m/s, symmetric cap on the scripted reference velocity -- see utils_traj.
         traj_p_min: float = 0.1, # N, lower bound used only when sampling a profile's interior control points.
         traj_p_max: float = 1.5, # N, cap on the scripted reference pressure (kept under f_safe).
         traj_accel_min: float = 0.005, # (m/s)^2, lower bound on the sampled velocity-profile curvature target `a_bar`.

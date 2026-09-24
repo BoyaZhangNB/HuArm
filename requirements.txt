@@ -1,0 +1,20 @@
+# Simulation (keep mujoco and mujoco-mjx on the same version)
+mujoco>=3.3
+mujoco-mjx>=3.3
+
+# JAX stack. For NVIDIA GPUs install `jax[cuda12]` instead of plain `jax`.
+jax>=0.4.30
+flax>=0.8
+optax>=0.2
+orbax-checkpoint>=0.5
+
+# Numerics, config, plotting
+numpy>=1.26
+scipy>=1.11
+pyyaml>=6.0
+tqdm>=4.66
+matplotlib>=3.8
+
+# Audio synthesis (synthesis.py; only needed for rendering/playing erhu audio)
+dawdreamer>=0.8
+sounddevice>=0.4

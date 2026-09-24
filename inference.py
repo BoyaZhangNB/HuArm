@@ -224,7 +224,7 @@ def parse_args() -> argparse.Namespace:
         help="Desired bow velocity (m/s) fed to the policy until the first CommandPacket arrives.",
     )
     parser.add_argument(
-        "--init-pressure", type=float, default=0.0,
+        "--init-pressure", type=float, default=0.2,
         help="Desired bow pressure (N) fed to the policy until the first CommandPacket arrives.",
     )
     parser.add_argument(
