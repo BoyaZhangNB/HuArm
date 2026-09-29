@@ -26,7 +26,7 @@ agent:
   tau: 0.005
   batch_size: 256
   buffer_capacity: 500000
-  gradient_steps: 256
+  gradient_steps: 512
   min_buffer_size: 10000
   hidden_dim: 256
   max_grad_norm: 1.0
@@ -34,7 +34,7 @@ agent:
 
 train:
   num_iterations: 400
-  steps_per_iteration: 2048
+  steps_per_iteration: 256
   eval_interval: 20
   eval_episodes: 16
   live_plot: false

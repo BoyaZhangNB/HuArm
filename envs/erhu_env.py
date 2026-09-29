@@ -6,7 +6,8 @@ from mujoco import mjx
 from mujoco.mjx._src import support as mjx_support
 from .mjx_env import MjxEnv, State
 from .utils_envs import (
-    arm_joint_indices, build_erhu_pose_pool, mat_to_quat, quat_conj, quat_mul,
+    arm_joint_indices, build_erhu_pose_pool, joint_to_actuator_id, mat_to_quat,
+    quat_conj, quat_mul,
 )
 from . import utils_dr, utils_noise, utils_traj, utils_traj_simple
 
@@ -117,40 +118,17 @@ class ErhuEnv(MjxEnv):
 
     ctrl is clamped to `mjx_model.actuator_ctrlrange` each step.
 
-    action[5] is a 6th, independent dimension that sets the bow_frog_hinge's
-    stiffness rather than driving a position target. The hinge itself stays
-    passive (no actuator torque) -- what this controls is dry (Coulomb)
-    friction on that one dof, standing in for the real bow frog's two plates
-    (one ball-bearing, one static) that a servo clamps together with
-    variable force: more clamp force -> more friction -> more torque needed
-    both to break the joint loose from rest and to keep it sliding once
-    moving.
-
-    Unlike the arm dims, action[5] is a normalized *delta*, not an absolute
-    target: it's added to the previous step's clamp position (a [0, 1]
-    fraction carried in `info["frog_stiffness"]`, since there's no MuJoCo
-    actuator state to hold it between steps) scaled by
-    `max_frog_stiffness_delta` and clamped to [0, 1] -- i.e. a clamp-rate
-    command, the analogue of action[:5]'s velocity command. The current
-    fraction is part of the observation (see `_get_obs`), so the policy
-    always sees the state its delta acts on. That
-    fraction maps linearly onto a friction torque scale in
-    [`frog_frictionloss_min`, `frog_frictionloss_max`] N*m, applied as a
-    `-scale * tanh(qvel / frog_friction_v_eps)` torque on that one dof, every
-    physics substep -- see `step`. tanh(qvel / v_eps) is a smoothed sign(qvel):
-    for |qvel| >> v_eps it saturates to +-1, giving the constant-magnitude
-    kinetic friction of sliding contact; for |qvel| << v_eps (at rest) it's
-    ~linear, so it acts like a stiff damper opposing any small motion, i.e.
-    the static/breakaway regime -- both governed by the same `scale`, as a
-    real friction clamp would be. (MuJoCo's own `dof_frictionloss` constraint
-    models this shape too, but which dofs get a friction constraint row is
-    fixed at model-compile time in MJX, not adjustable per step by an
-    action -- hence the explicit force law here instead.) The torque is
-    additionally clamped, per substep, to whatever impulse would exactly
-    zero `qvel` that substep -- unlike native passive forces, this explicit
-    `qfrc_applied` force isn't covered by `erhu.xml`'s implicit integrator,
-    and at the frog dof's tiny effective inertia an unclamped version would
-    overshoot `qvel`'s zero-crossing and diverge -- see `step`.
+    action[5] drives the 6th actuator, a direct torque `<motor>` on the
+    bow_frog_hinge (see arm.xml), standing in for a motor at the bow frog.
+    Unlike the arm dims it is a normalized *delta*, not an absolute target:
+    it's added to the torque already held in `data.ctrl` (MuJoCo carries
+    ctrl from step to step, so no extra state is needed) scaled by
+    `max_frog_torque_delta` (N*m per step), and clamped to the motor's
+    ctrlrange (+-0.2 N*m in arm.xml, exposed as `max_frog_torque`) -- i.e. a
+    torque-rate command, the analogue of action[:5]'s velocity command.
+    Reset zeroes it, so each episode starts with a passive hinge (damping
+    only). The current torque is part of the observation (see `_get_obs`),
+    so the policy always sees the state its delta acts on.
     """
 
     def __init__(
@@ -180,20 +158,9 @@ class ErhuEnv(MjxEnv):
         traj_margin: float = 0.02, # normalized bow-position margin that triggers sampling a new reference segment.
         traj_period_min: float = 4.0, # s, lower bound on the sampled sine-wave period -- see utils_traj_simple.
         traj_period_max: float = 6.0, # s, upper bound on the sampled sine-wave period.
-        frog_frictionloss_min: float = 0.0, # N*m, friction torque scale on bow_frog_hinge at frog_stiffness fraction = 0 (loosest clamp).
-        frog_frictionloss_max: float = 0.05, # N*m, at frog_stiffness fraction = 1 (tightest clamp). Gravity's own torque on the
-                                             # hinge tops out around 0.05 N*m (see utils_envs.frog_hinge_gravity for
-                                             # a given pose) and damping alone is 0.05 N*m*s/rad, so this range spans
-                                             # "barely more resistance than today's passive hinge" to "several times
-                                             # gravity's pull, effectively locked".
-        frog_friction_v_eps: float = 0.05, # rad/s, velocity scale of the static/sliding transition -- see the class
-                                            # docstring's action[5] paragraph.
-        max_frog_stiffness_delta: float = 0.03, # max per-step change in the [0, 1] clamp fraction -- action[5]'s
-                                                 # analogue of `max_joint_vel`. At the default, a full loose->tight
-                                                 # sweep takes 20 steps (0.8s at 25Hz).
-        frog_stiffness_init: float = 0.0, # [0, 1] clamp fraction the episode starts at (info["frog_stiffness"] in
-                                           # `reset`) -- 0.0 (loosest) matches the hinge's old, feature-free passive
-                                           # behavior until the policy commands otherwise.
+        max_frog_torque_delta: float = 0.02, # N*m, max per-step change in the bow_frog_hinge motor torque --
+                                              # action[5]'s analogue of `max_joint_vel`. At the default, a full
+                                              # -0.2 -> +0.2 N*m sweep takes 20 steps (0.8s at 25Hz).
         reward_weights: Dict[str, float] = None,
         dr_pool_size: int = 1024,
         dr_pool_seed: int = 0,
@@ -238,11 +205,7 @@ class ErhuEnv(MjxEnv):
         self.traj_accel_range = (traj_accel_min, traj_accel_max)
         self.traj_margin = traj_margin
         self.traj_period_range = (traj_period_min, traj_period_max)
-        self.frog_frictionloss_min = frog_frictionloss_min
-        self.frog_frictionloss_max = frog_frictionloss_max
-        self.frog_friction_v_eps = frog_friction_v_eps
-        self.max_frog_stiffness_delta = max_frog_stiffness_delta
-        self.frog_stiffness_init = frog_stiffness_init
+        self.max_frog_torque_delta = max_frog_torque_delta
 
         self.reward_weights = dict(
             velocity=1.0,
@@ -312,8 +275,8 @@ class ErhuEnv(MjxEnv):
         self._ctrl_lo = self.mjx_model.actuator_ctrlrange[:, 0]
         self._ctrl_hi = self.mjx_model.actuator_ctrlrange[:, 1]
 
-        # The bow-frog hinge is a passive, unsprung joint (see
-        # `utils_envs.frog_hinge_gravity`) with no real-world sensor -- at
+        # The bow-frog hinge is an unsprung, torque-driven joint (see
+        # `utils_envs.frog_hinge_gravity`) with no real-world angle sensor -- at
         # inference time there is nothing that measures or tracks it, so its
         # qpos/qvel are excluded from the observation (they're still
         # simulated and part of the physics state, just not observed). These
@@ -328,10 +291,14 @@ class ErhuEnv(MjxEnv):
         self._obs_qvel_idxs = jp.asarray(
             [i for i in range(m.nv) if i != frog_dof_adr]
         )
-        # Also needed by `step` to apply the action-controlled friction
-        # torque to this one dof each substep -- see action[5] in the class
-        # docstring.
-        self._frog_dof_adr = frog_dof_adr
+        # The hinge's torque motor, driven by action[5] -- see the class
+        # docstring. action[i] maps onto ctrl[i], so it has to be the last
+        # actuator for action[-1] to be the torque dim.
+        self._frog_aid = joint_to_actuator_id(m, "bow_frog_hinge")
+        assert self._frog_aid == m.nu - 1, (
+            f"bow_frog_hinge motor must be the last actuator, got id {self._frog_aid} of nu={m.nu}"
+        )
+        self.max_frog_torque = float(m.actuator_ctrlrange[self._frog_aid, 1])
 
         # The erhu's local left/right axis, expressed in the erhu root frame.
         self._lateral_axis_local = jp.array([1.0, 0.0, 0.0])
@@ -352,14 +319,6 @@ class ErhuEnv(MjxEnv):
         )
 
     # ------------------------------------------------------------------
-    @property
-    def action_size(self) -> int:
-        """5 arm joint velocities + 1 bow_frog_hinge stiffness dim -- see the
-        class docstring. One more than `mjx_model.nu`: the stiffness dim
-        drives an explicit friction torque in `step` rather than a MuJoCo
-        actuator, so it has no slot in `actuator_ctrlrange`."""
-        return self.mjx_model.nu + 1
-
     def effective_model(
         self,
         dr_params: Dict[str, jax.Array],
@@ -513,11 +472,6 @@ class ErhuEnv(MjxEnv):
             "action_history": jp.zeros((self.n_stack, self.action_size)),
             "force_history": jp.zeros((self.n_stack, self._force_dim)),
             "prev_bow_mid_local": self._relative(mid, self._erhu_root_id, data),
-            # bow_frog_hinge's friction-clamp position, a [0, 1] fraction --
-            # action[5] is a delta on this, not an absolute target, so it has
-            # to be carried in info rather than read off a MuJoCo actuator
-            # state (there is none) -- see the class docstring and `step`.
-            "frog_stiffness": jp.asarray(self.frog_stiffness_init),
             "contact_steps": jp.asarray(0.0),
             "bow_a_force_ema": jp.asarray(0.0),
             "bow_vel_ema": jp.asarray(0.0),
@@ -586,11 +540,12 @@ class ErhuEnv(MjxEnv):
             jp.reshape(force, (1,)),
             jp.reshape(desired_velocity, (1,)), jp.reshape(desired_pressure, (1,)),
             jp.reshape(forbidden_dist, (1,)),
-            # Current clamp fraction that action[5] is a delta on -- without
-            # it the policy can't know the state its stiffness action
-            # integrates (MDP property). Exact, not noised: it's a commanded
-            # state the controller knows, like action_history.
-            jp.reshape(info["frog_stiffness"], (1,)),
+            # Current bow_frog_hinge motor torque (N*m) that action[5] is a
+            # delta on -- without it the policy can't know the state its
+            # torque action integrates (MDP property). Exact, not noised:
+            # it's a commanded state the controller knows, like
+            # action_history.
+            jp.reshape(data.ctrl[self._frog_aid], (1,)),
             info["action_history"].reshape(-1),
             info["force_history"].reshape(-1),
         ])
@@ -777,54 +732,18 @@ class ErhuEnv(MjxEnv):
             state.info["dr_params"], state.info["erhu_drift"], prev_data.time
         )
 
-        arm_action, stiffness_action = action[:-1], action[-1]
+        # action[:5]: absolute joint velocity command (rad/s). action[5]: a
+        # delta on the bow_frog_hinge motor torque already held in ctrl
+        # (N*m) -- see the class docstring. Both land in ctrl, clamped to
+        # the actuators' ctrlrange (which bounds the torque to
+        # +-max_frog_torque).
+        ctrl = jp.concatenate([
+            action[:-1] * self.max_joint_vel,
+            prev_data.ctrl[self._frog_aid:] + action[-1:] * self.max_frog_torque_delta,
+        ])
+        ctrl = jp.clip(ctrl, self._ctrl_lo, self._ctrl_hi)
 
-        # Absolute joint velocity command (rad/s) -- see the class docstring.
-        ctrl = jp.clip(arm_action * self.max_joint_vel, self._ctrl_lo, self._ctrl_hi)
-
-        # stiffness_action in [-1, 1] is a delta on the clamp fraction
-        # (info["frog_stiffness"]) -- see the class docstring. That fraction maps linearly onto
-        # a friction torque scale on bow_frog_hinge in
-        # [frog_frictionloss_min, frog_frictionloss_max] N*m, standing in
-        # for how hard the frog's clamp plates are pressed together this
-        # step. Applied as an explicit qfrc every substep (rather than
-        # MuJoCo's own `dof_frictionloss` constraint) because MJX fixes
-        # which dofs carry a friction constraint row at model-compile time,
-        # not adjustable per step by an action.
-        frog_stiffness = jp.clip(
-            state.info["frog_stiffness"] + stiffness_action * self.max_frog_stiffness_delta,
-            0.0, 1.0,
-        )
-        frog_frictionloss = (
-            self.frog_frictionloss_min
-            + frog_stiffness * (self.frog_frictionloss_max - self.frog_frictionloss_min)
-        )
-
-        def frog_friction_qfrc(d: mjx.Data) -> jax.Array:
-            frog_qvel = d.qvel[self._frog_dof_adr]
-            desired = -frog_frictionloss * jp.tanh(frog_qvel / self.frog_friction_v_eps)
-            # Clamp to the impulse that would exactly zero qvel this substep.
-            # `erhu.xml`'s implicitfast integrator only linearizes native
-            # passive forces (dof_damping, actuator dynamics) -- an
-            # explicit qfrc_applied force like this one isn't covered, so
-            # near qvel=0 (tanh's linear region) this is effectively an
-            # explicit linear damper with c_eff = frog_frictionloss /
-            # frog_friction_v_eps, which at the frog dof's tiny effective
-            # inertia is far past the explicit-integration stability bound
-            # (c_eff*dt/I_eff << 2) at *any* nonzero frictionloss -- left
-            # unclamped this overshoots qvel's zero-crossing and diverges
-            # to inf/NaN within a few substeps. Capping the torque at the
-            # impulse that lands exactly on qvel=0 (never past it) is the
-            # standard fix for explicit dry-friction forces.
-            substep_dt = model.opt.timestep
-            inv_weight = model.dof_invweight0[self._frog_dof_adr]
-            max_torque = jp.abs(frog_qvel) / jp.maximum(inv_weight * substep_dt, 1e-12)
-            torque = jp.clip(desired, -max_torque, max_torque)
-            return jp.zeros(model.nv).at[self._frog_dof_adr].set(torque)
-
-        data = self.pipeline_step(
-            prev_data, ctrl, model=model, extra_qfrc_fn=frog_friction_qfrc
-        )
+        data = self.pipeline_step(prev_data, ctrl, model=model)
 
         info: Dict[str, Any] = state.info.copy()
         k = self._step_kinematics(data, info, model)
@@ -839,7 +758,6 @@ class ErhuEnv(MjxEnv):
         info["action_history"] = jp.concatenate(
             [info["action_history"][1:], action[None, :]], axis=0
         )
-        info["frog_stiffness"] = frog_stiffness
         info["prev_bow_mid_local"] = k["mid_local"]
         info["contact_steps"] = k["contact_steps"]
         info["bow_a_force_ema"] = k["bow_a_force_ema"]

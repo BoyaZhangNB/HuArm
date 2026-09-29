@@ -95,7 +95,7 @@ def main():
     env = ErhuEnv(episode_time_limit=1e9, dr_pool_size=1)
     assert actions.shape[-1] == env.action_size, (
         f"demo action dim {actions.shape[-1]} != ErhuEnv.action_size {env.action_size} "
-        f"-- this demo was recorded before the bow_frog_hinge stiffness action dim "
+        f"-- this demo was recorded before the bow_frog_hinge action dim "
         f"(action[5]) was added and can no longer be replayed against the current env."
     )
     _step = jax.jit(env.step)

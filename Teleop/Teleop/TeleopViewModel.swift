@@ -2,9 +2,9 @@
 //  TeleopViewModel.swift
 //  Teleop
 //
-//  Ties together AR position tracking, the stiffness slider, the
+//  Ties together AR position tracking, the frog-torque slider, the
 //  reset/collect button state, and the network send paths.
-//  Position/stiffness packets go out over UDP at a fixed rate off the AR
+//  Position/torque packets go out over UDP at a fixed rate off the AR
 //  frame callback (which runs at ~60 Hz) so the network isn't flooded.
 //  reset/collect are one-off state changes, so they're sent immediately over
 //  TCP for reliable delivery instead of riding the UDP loop.
@@ -22,10 +22,10 @@ final class TeleopViewModel: ObservableObject {
     @Published var isCollecting = false
     @Published var lastResetAt: Date?
     @Published var sendRateHz: Double = 30
-    /// bow_frog_hinge friction-clamp target, a [0, 1] fraction (0 = loosest,
-    /// 1 = tightest) set directly by the operator via the slider -- see
-    /// PositionPacket's `stiffness` field.
-    @Published var stiffness: Double = 0
+    /// bow_frog_hinge motor torque target in N*m, within
+    /// +-FrogTorqueLimits.maxTorque (0 = passive hinge), set directly by the
+    /// operator via the slider -- see PositionPacket's `torque` field.
+    @Published var torque: Double = 0
 
     let arManager = ARPositionManager()
     private let udpClient = UDPClient()
@@ -91,7 +91,7 @@ final class TeleopViewModel: ObservableObject {
             x: pos.x,
             y: pos.y,
             z: pos.z,
-            stiffness: stiffness
+            torque: torque
         )
         guard let data = packet.encoded() else { return }
         udpClient.send(data)

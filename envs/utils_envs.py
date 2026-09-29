@@ -11,7 +11,7 @@ import numpy as np
 
 # Listed in actuator order (joint5 sits between joint2 and joint3 in the
 # kinematic chain, and its actuator is declared there too), with the
-# unactuated frog hinge last.
+# torque-driven frog hinge (a <motor>, not a velocity servo) last.
 ARM_JOINT_NAMES = ("joint1", "joint2", "joint5", "joint3", "joint4", "bow_frog_hinge")
 
 # Geoms that define the threading problem (see `solve_bow_insertion`).

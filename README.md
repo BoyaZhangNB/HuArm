@@ -1,23 +1,33 @@
 # HuArm
 A robot arm that plays Erhu
 
+## Action Space
+
+`ErhuEnv.action_size` is `nu = 6`, one dim per actuator in
+[arm.xml](huarm/arm.xml)'s `<actuator>` order, each in `[-1, 1]` (see
+`ErhuEnv`'s class docstring):
+
+| Dim | Actuator | Description |
+|---|---|---|
+| 0-4 | `joint1, joint2, joint5, joint3, joint4` velocity servos | Absolute joint velocity command, scaled by `max_joint_vel` (1.25 rad/s). No position term: a zero command doesn't hold a pose, the policy closes the loop itself |
+| 5 | `bow_frog_motor` (torque motor on `bow_frog_hinge`) | *Delta* on the hinge torque held in `data.ctrl`, scaled by `max_frog_torque_delta` (0.02 N·m/step) and clamped to the motor's ctrlrange of ±0.2 N·m (`max_frog_torque`). Reset zeroes it, so each episode starts with a passive hinge |
+
 ## Observation Space
 
 Built by `ErhuEnv._get_obs` (see [erhu_env.py](envs/erhu_env.py)) as a single
 flat vector via `jp.concatenate`, in this order. Dims are for the current
-model (`nq=6`, `nv=6`, `nu=5`, force dim `1`, `n_stack=3`). `action_size` is
-`nu + 1 = 6` -- the 5 arm joint velocity commands (joint-space velocity
-control, scaled by `max_joint_vel`) plus a 6th dim that sets
-`bow_frog_hinge`'s friction-clamp stiffness rather than driving an actuator
-(see `ErhuEnv`'s class docstring) -- giving a total observation size of
-**52** (verified via `ErhuEnv.observation_size` / `state.obs.shape`).
+model (`nq=6`, `nv=6`, `nu=6`, force dim `1`, `n_stack=3`, `action_size=6`),
+giving a total observation size of **52** (verified via
+`ErhuEnv.observation_size` / `state.obs.shape`).
 
 The model has 6 joints (`joint1, joint2, joint5, joint3, joint4,
-bow_frog_hinge`), but `bow_frog_hinge` is a passive, unsprung joint with no
-real-world sensor -- nothing measures or tracks it at inference time -- so
-its qpos/qvel are excluded from the observation (`ErhuEnv._obs_qpos_idxs` /
-`_obs_qvel_idxs`). It's still simulated and part of the physics state, just
-not observed, so `qpos`/`qvel` below are `nq - 1` / `nv - 1`, not `nq`/`nv`.
+bow_frog_hinge`). `bow_frog_hinge` is unsprung and driven only by its torque
+motor (action dim 5), and it has no real-world angle sensor -- nothing
+measures or tracks it at inference time -- so its qpos/qvel are excluded
+from the observation (`ErhuEnv._obs_qpos_idxs` / `_obs_qvel_idxs`). It's
+still simulated and part of the physics state, just not observed, so
+`qpos`/`qvel` below are `nq - 1` / `nv - 1`, not `nq`/`nv`. The torque it's
+being driven with *is* observed (`frog_torque`).
 
 | Component | Dim | Description |
 |---|---|---|
@@ -32,14 +42,14 @@ not observed, so `qpos`/`qvel` below are `nq - 1` / `nv - 1`, not `nq`/`nv`.
 | `desired_velocity` | 1 | Target bow velocity |
 | `desired_pressure` | 1 | Target bow pressure |
 | `forbidden_dist` | 1 | Distance to forbidden bowing area |
-| `frog_stiffness` | 1 | Current bow-frog clamp fraction in [0, 1] -- the state `action[5]` is a delta on; exact, no noise |
+| `frog_torque` | 1 | Current `bow_frog_hinge` motor torque command (`data.ctrl[5]`), N·m in [-0.2, 0.2] -- the state `action[5]` is a delta on; exact, no noise |
 | `action_history` | 18 | Last `n_stack=3` actions, flattened (`3 x action_size=6`) |
 | `force_history` | 3 | Last `n_stack=3` force readings as observed (noise included), flattened (`3 x force_dim=1`) -- the newest entry is this step's, so it repeats the `force` slot above |
 | **Total** | **52** | |
 
 Observation noise is added to the measurement blocks -- `qpos`, `qvel`, the
 five pose blocks and `force`, i.e. the first 27 entries. The reference
-values (`desired_*`, `forbidden_dist`, `frog_stiffness`) stay exact, being commands rather
+values (`desired_*`, `forbidden_dist`, `frog_torque`) stay exact, being commands rather
 than measurements. The history blocks get no *second* noise draw, but
 `force_history` is not clean either: it stores each step's force as it was
 observed, noise included, so the history a policy reads in training is the
@@ -59,7 +69,7 @@ episode in `state.info["dr_params"]` and merged onto the base model by
 | What | How |
 |---|---|
 | Bow weight | One factor for the whole bow assembly (mass and inertia together), on top of the per-body mass jitter applied to the rest of the model |
-| Actuator params | Velocity-actuator gain `kv` and the first-order filter time constant that stands in for actuation delay, per actuator |
+| Actuator params | Velocity-actuator gain `kv` and the first-order filter time constant that stands in for actuation delay, per actuator. The same gain factor also scales the frog motor's torque constant (it has no filter, so the delay factor is a no-op there) |
 | Erhu placement | Drawn from the pre-solved pose pool (`utils_envs.build_erhu_pose_pool`), then drifted slowly across the episode: a cylinder is drawn around the instrument, one point sampled on each end cap, and the erhu walks toward the pose that best fits its top/bottom centres to them |
 | Bow placement | Start pose comes with the drawn pool entry; the reference stroke it is scored against is resampled continuously by [utils_traj.py](envs/utils_traj.py) |
 | Contact params | `solref` (time constant, damping ratio) and `solimp` (`d0`, `d1`, width) on the bow-hair/string pairs only -- the contact that is the task; every other contact in the scene is a backstop the bow should never reach |

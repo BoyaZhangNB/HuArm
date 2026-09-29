@@ -5,7 +5,7 @@
 //  Defines PositionPacket and ControlPacket, the two wire formats sent to
 //  the robot (see below).
 //
-//  Wire formats sent to the robot. Position/stiffness is high-rate and
+//  Wire formats sent to the robot. Position/torque is high-rate and
 //  loss-tolerant, so it goes out over UDP as `PositionPacket`. reset/collect
 //  are state changes that must arrive, so they go out over TCP as
 //  `ControlPacket` (see TCPClient for the newline-delimited framing).
@@ -16,7 +16,7 @@
 //  inference.py (a running policy) rather than teleop.py.
 //
 //  PositionPacket, one JSON object per UDP datagram:
-//  {"x": <float>, "y": <float>, "z": <float>, "stiffness": <float>}
+//  {"x": <float>, "y": <float>, "z": <float>, "torque": <float>}
 //
 //  ControlPacket, one JSON object per newline-terminated TCP send:
 //  {"reset": <bool>, "collect": <bool>}
@@ -30,12 +30,12 @@
 //  always sent: inference.py drops a datagram missing either rather than
 //  half-applying it.
 //
-//  stiffness is a [0, 1] fraction, set directly by the operator via the
-//  stiffness slider, giving teleop.py's bow_frog_hinge friction clamp its
-//  target (0 = loosest/passive, 1 = tightest -- see ErhuEnv's action[5]
-//  docstring). Unlike x/y/z it is sent as an absolute value, not a delta
-//  from the last reset -- there is no "origin" for a clamp fraction to be
-//  relative to.
+//  torque is a signed N*m value in [-FrogTorqueLimits.maxTorque,
+//  +FrogTorqueLimits.maxTorque], set directly by the operator via the torque
+//  slider, giving teleop.py's bow_frog_hinge motor its torque target (0 =
+//  passive hinge -- see ErhuEnv's action[5] docstring). Unlike x/y/z it is
+//  sent as an absolute value, not a delta from the last reset -- there is
+//  no "origin" for a torque to be relative to.
 //
 //  On the receiving (Python) side, `json.loads(datagram)` turns this into a
 //  dict with True/False for the booleans, matching the requested schema.
@@ -47,7 +47,7 @@ struct PositionPacket: Codable {
     let x: Double
     let y: Double
     let z: Double
-    let stiffness: Double
+    let torque: Double
 
     func encoded() -> Data? {
         try? JSONEncoder().encode(self)
@@ -94,4 +94,11 @@ enum RobotDefaults {
 enum BowCommandLimits {
     static let velocityLimit: Double = 0.1   // m/s, symmetric
     static let pressureMax: Double = 3.0     // N
+}
+
+/// Limit of the frog-torque slider. Mirrors the bow_frog_motor ctrlrange in
+/// huarm/arm.xml (ErhuEnv.max_frog_torque); teleop.py clips anything beyond
+/// it anyway.
+enum FrogTorqueLimits {
+    static let maxTorque: Double = 0.2       // N*m, symmetric
 }

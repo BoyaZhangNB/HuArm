@@ -55,6 +55,9 @@ def main(xml_path):
     # Fill the same MjData object the viewer was launched with, rather than
     # rebinding `data` to a new object mujoco.viewer never sees.
     mjx.get_data_into(data, model, state.pipeline_state)
+    # bow_frog_hinge motor torque (N*m): the Control-panel target, and the
+    # value the env last wrote back into data.ctrl -- see the main loop.
+    frog_target = last_frog_ctrl = 0.0
 
     # TEMPORARY: background thread that sets reset_event whenever Enter is
     # pressed in the terminal, so the main loop below can reset the env.
@@ -67,6 +70,7 @@ def main(xml_path):
         viewer.sync()
         print("Teleoperation loop running. Press ESC in viewer to exit.")
         print("Drag the actuator sliders in the viewer's Control panel to command joint velocities")
+        print("(the last slider, bow_frog_motor, is a frog hinge torque target in N*m).")
         print("(a slider left off zero keeps the joint moving; 'Clear all' stops the arm).")
         start = time.time()
         try:
@@ -77,6 +81,7 @@ def main(xml_path):
                     state = env.reset(jax.random.PRNGKey(20 + reset_key_counter[0]))
                     state = _step(state, jp.zeros(env.action_size))
                     mjx.get_data_into(data, model, state.pipeline_state)
+                    frog_target = last_frog_ctrl = 0.0
                     viewer.sync()
                     start = time.time()
                     print("\nEnvironment reset (manual).")
@@ -95,16 +100,20 @@ def main(xml_path):
                 with viewer.lock():
                     target_ctrl = data.ctrl.copy()
 
-                # action[-1] (bow_frog_hinge friction-clamp stiffness delta --
-                # see ErhuEnv's action[5] docstring) has no actuator, so
-                # nothing in the viewer's Control panel can drive it. Sending
-                # -1.0 every step pins info["frog_stiffness"] at its 0.0
-                # (loosest) floor -- it starts there already (reset()'s
-                # default), so this just keeps this manual-test loop on the
-                # hinge's old passive-only behavior instead of silently
-                # ramping up friction over time.
+                # action[-1] is a *delta* on the bow_frog_hinge motor torque
+                # (see ErhuEnv's action[5] docstring), so its Control-panel
+                # slider (N*m) is treated as a target to ramp toward. The
+                # rate limit means the env writes back an intermediate
+                # ctrl each step (get_data_into below), which would
+                # otherwise overwrite the slider -- so only take a new
+                # target when the slider moved off what the env last wrote.
+                frog_aid = env._frog_aid
+                if target_ctrl[frog_aid] != last_frog_ctrl:
+                    frog_target = float(target_ctrl[frog_aid])
                 action = np.zeros(env.action_size, dtype=np.float32)
-                action[-1] = -1.0
+                action[frog_aid] = np.clip(
+                    (frog_target - last_frog_ctrl) / env.max_frog_torque_delta, -1.0, 1.0
+                )
                 for aid in arm_actuator_ids:
                     if aid < 0:
                         continue
@@ -124,6 +133,7 @@ def main(xml_path):
                     metrics_logger.close()
                     exit(0)
                 mjx.get_data_into(data, model, state.pipeline_state)
+                last_frog_ctrl = float(data.ctrl[env._frog_aid])
 
                 viewer.sync()
 

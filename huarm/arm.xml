@@ -164,7 +164,7 @@
 
              kv is per joint, set as high as it goes before the servo
              saturates into a forcerange bang-bang limit cycle (coupled
-             through the passive bow_frog_hinge) on a 1-2 rad/s step, with
+             through the torque-driven bow_frog_hinge) on a 1-2 rad/s step, with
              margin for utils_dr's +15% gain randomization: joint2/5/4
              chatter from kv~50, joint1/3 are clean past 80. -->
         <general joint="joint1" ctrllimited="true" ctrlrange="-2 2" forcerange="-8 8"
@@ -187,6 +187,14 @@
                  dyntype="filter" dynprm="0.03 0 0"
                  gaintype="fixed" gainprm="30 0 0"
                  biastype="affine" biasprm="0 0 -30"/>
+
+        <!-- Direct torque motor on bow_frog_hinge: ctrl is the hinge torque
+             in N*m, clamped to +-0.2. Declared last so it is ctrl[-1] /
+             action[-1]; ErhuEnv drives it as a per-step delta on the held
+             ctrl (see its action[5] docstring). ctrl = 0 leaves the hinge
+             passive (damping only). -->
+        <motor name="bow_frog_motor" joint="bow_frog_hinge" gear="1"
+               ctrllimited="true" ctrlrange="-0.2 0.2"/>
     </actuator>
 
     <include file="erhu.xml"/>

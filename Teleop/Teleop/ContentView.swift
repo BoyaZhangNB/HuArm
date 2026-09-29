@@ -14,7 +14,7 @@ struct ContentView: View {
                 VStack(spacing: Theme.cardSpacing) {
                     PageHeader(
                         title: "Arm",
-                        subtitle: "Position + stiffness \u{2192} teleop.py",
+                        subtitle: "Position + torque \u{2192} teleop.py",
                         statusText: viewModel.isStreaming ? "Streaming" : "Idle",
                         statusColor: viewModel.isStreaming ? .green : .secondary
                     )
@@ -69,18 +69,26 @@ struct ContentView: View {
                         }
                     }
 
-                    Card(title: "Stiffness", systemImage: "dial.medium") {
+                    Card(title: "Frog Torque", systemImage: "dial.medium") {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
                                 Text("Target")
                                     .foregroundStyle(.secondary)
                                 Spacer()
-                                Text(formatFraction(viewModel.stiffness))
+                                Text(formatTorque(viewModel.torque))
                                     .monospacedDigit()
                                     .font(.title3.weight(.semibold))
+                                Button("Zero") {
+                                    viewModel.torque = 0
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
                             }
-                            Slider(value: $viewModel.stiffness, in: 0 ... 1)
-                            Text("bow_frog_hinge friction-clamp target: 0 is loosest (passive), 1 is tightest.")
+                            Slider(
+                                value: $viewModel.torque,
+                                in: -FrogTorqueLimits.maxTorque ... FrogTorqueLimits.maxTorque
+                            )
+                            Text("bow_frog_hinge motor torque target, \u{00B1}\(String(format: "%.1f", FrogTorqueLimits.maxTorque)) N\u{00B7}m (0 = passive).")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
@@ -124,8 +132,8 @@ struct ContentView: View {
         String(format: "% .3f m", value)
     }
 
-    private func formatFraction(_ value: Double) -> String {
-        String(format: "%.2f", value)
+    private func formatTorque(_ value: Double) -> String {
+        String(format: "%+.3f N\u{00B7}m", value)
     }
 }
 

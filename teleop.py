@@ -4,7 +4,7 @@ Position and control now arrive over two separate sockets/transports, mirroring
 the two structs on the operator (Swift) side:
 
     PositionPacket (UDP, unordered/lossy, one-shot datagrams):
-        {"x": float, "y": float, "z": float, "stiffness": float}
+        {"x": float, "y": float, "z": float, "torque": float}
 
     ControlPacket (TCP, ordered/reliable, newline-delimited JSON stream):
         {"reset": bool, "collect": bool}
@@ -12,16 +12,17 @@ the two structs on the operator (Swift) side:
 (x, y, z) is a desired end-effector displacement *relative to the EE
 position at the moment `reset` last went true* -- not an absolute world
 coordinate, since the operator has no reason to know the arm's base frame.
-`stiffness` is the bow_frog_hinge friction-clamp target the iOS app exposes,
-a [0, 1] fraction (0 = loosest/passive, 1 = tightest, see ErhuEnv's action[5]
-docstring) sent as an absolute target rather than a delta-from-origin --
-unlike (x, y, z) there is no "origin" for it to be relative to. Each control
+`torque` is the bow_frog_hinge motor torque target the iOS app exposes, in
+N*m within +-ErhuEnv.max_frog_torque (0.2; 0 = passive hinge, see ErhuEnv's
+action[5] docstring), sent as an absolute target rather than a
+delta-from-origin -- unlike (x, y, z) there is no "origin" for it to be
+relative to. Each control
 step, (x, y, z) is solved via damped least-squares IK (reusing
 `utils.jacobian_ik`, the same routine the env's own pose-pool/domain-
 randomization code uses) into arm joint angles, converted into the env's
 normalized joint-velocity action space -- the velocity that closes the gap
-from the current pose in one env step (plus a bow_frog_hinge stiffness delta,
-action[5], tracking `stiffness` as its target -- see `solve_ik`/action[5]
+from the current pose in one env step (plus a bow_frog_hinge torque delta,
+action[5], tracking `torque` as its target -- see `solve_ik`/action[5]
 handling below), and applied through `ErhuEnv.step` -- never by poking
 `data.ctrl` directly -- so the physics,
 reward/termination bookkeeping, and observation vector stay bit-for-bit
@@ -127,7 +128,7 @@ class UDPReceiver(threading.Thread):
             "x": float(pkt["x"]),
             "y": float(pkt["y"]),
             "z": float(pkt["z"]),
-            "stiffness": float(pkt["stiffness"]),
+            "torque": float(pkt["torque"]),
         }
 
     def run(self):
@@ -263,7 +264,7 @@ def desired_velocity_obs_idx(model) -> int:
     rel_quat(4), frog_rel(3), tip_rel(3), mid_rel(3), force(1) -- a
     uni-directional scalar, the raw sensor force projected onto the arm's
     last-link axis, see ErhuEnv._axial_force -- [desired_velocity,
-    desired_pressure], forbidden_dist, frog_stiffness, ... -- update this if that layout
+    desired_pressure], forbidden_dist, frog_torque, ... -- update this if that layout
     ever changes."""
     return (model.nq - 1) + (model.nv - 1) + 3 + 4 + 3 + 3 + 3 + 1
 
@@ -595,19 +596,20 @@ def main():
                             (target_q - current_q) / env.dt / env.max_joint_vel, -1.0, 1.0
                         )
                         # action[5]: delta-toward-target conversion against
-                        # the operator's live `stiffness` target (an absolute
-                        # [0, 1] fraction, not a delta-from-origin like
-                        # x/y/z) and ErhuEnv's own tracked
-                        # info["frog_stiffness"] (there's no MuJoCo actuator
-                        # state to read this off).
-                        target_frog_stiffness = float(np.clip(pkt["stiffness"], 0.0, 1.0))
-                        prev_frog_stiffness = float(state.info["frog_stiffness"])
-                        frog_action = np.clip(
-                            (target_frog_stiffness - prev_frog_stiffness)
-                            / env.max_frog_stiffness_delta,
+                        # the operator's live `torque` target (an absolute
+                        # N*m value, not a delta-from-origin like x/y/z) and
+                        # the torque the frog motor currently holds in ctrl.
+                        # solve_ik leaves that motor's slot at 0, so it's
+                        # simply overwritten here.
+                        target_frog_torque = float(
+                            np.clip(pkt["torque"], -env.max_frog_torque, env.max_frog_torque)
+                        )
+                        prev_frog_torque = float(state.pipeline_state.ctrl[env._frog_aid])
+                        action = arm_action.copy()
+                        action[env._frog_aid] = np.clip(
+                            (target_frog_torque - prev_frog_torque) / env.max_frog_torque_delta,
                             -1.0, 1.0,
                         )
-                        action = np.concatenate([arm_action, [frog_action]])
                         state = _step(state, jp.asarray(action, dtype=jp.float32))
                         mjx.get_data_into(data, model, state.pipeline_state)
                         viewer.sync()

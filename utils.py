@@ -266,8 +266,8 @@ def jacobian_ik(model, data, body_points, target_pos, joint_names,
     body_points is a list of (body_name, local_offset, weight) triples, see
     weighted_point_and_jacobian.
 
-    joint_names may include unactuated joints (e.g. the passive bow_frog_hinge)
-    as extra free DOFs for the solver to use -- their qpos gets solved for and
+    joint_names may include non-servoed joints (e.g. the torque-driven
+    bow_frog_hinge) as extra free DOFs for the solver to use -- their qpos gets solved for and
     written just like any actuated joint. Joints with hard limits (jnt_limited,
     e.g. joint1..5 and the frog hinge) are clamped to model.jnt_range after
     every step so the solver can't swing them past their physical stops.
