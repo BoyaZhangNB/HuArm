@@ -13,7 +13,7 @@ the two structs on the operator (Swift) side:
 position at the moment `reset` last went true* -- not an absolute world
 coordinate, since the operator has no reason to know the arm's base frame.
 `torque` is the bow_frog_hinge motor torque target the iOS app exposes, in
-N*m within +-ErhuEnv.max_frog_torque (0.2; 0 = passive hinge, see ErhuEnv's
+N*m within +-ErhuEnv.max_frog_torque (1.0; 0 = passive hinge, see ErhuEnv's
 action[5] docstring), sent as an absolute target rather than a
 delta-from-origin -- unlike (x, y, z) there is no "origin" for it to be
 relative to. Each control

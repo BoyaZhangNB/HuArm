@@ -10,7 +10,7 @@ A robot arm that plays Erhu
 | Dim | Actuator | Description |
 |---|---|---|
 | 0-4 | `joint1, joint2, joint5, joint3, joint4` velocity servos | Absolute joint velocity command, scaled by `max_joint_vel` (1.25 rad/s). No position term: a zero command doesn't hold a pose, the policy closes the loop itself |
-| 5 | `bow_frog_motor` (torque motor on `bow_frog_hinge`) | *Delta* on the hinge torque held in `data.ctrl`, scaled by `max_frog_torque_delta` (0.02 N·m/step) and clamped to the motor's ctrlrange of ±0.2 N·m (`max_frog_torque`). Reset zeroes it, so each episode starts with a passive hinge |
+| 5 | `bow_frog_motor` (torque motor on `bow_frog_hinge`) | *Delta* on the hinge torque held in `data.ctrl`, scaled by `max_frog_torque_delta` (0.02 N·m/step) and clamped to the motor's ctrlrange of ±1 N·m (`max_frog_torque`). Reset zeroes it, so each episode starts with a passive hinge |
 
 ## Observation Space
 
@@ -42,7 +42,7 @@ being driven with *is* observed (`frog_torque`).
 | `desired_velocity` | 1 | Target bow velocity |
 | `desired_pressure` | 1 | Target bow pressure |
 | `forbidden_dist` | 1 | Distance to forbidden bowing area |
-| `frog_torque` | 1 | Current `bow_frog_hinge` motor torque command (`data.ctrl[5]`), N·m in [-0.2, 0.2] -- the state `action[5]` is a delta on; exact, no noise |
+| `frog_torque` | 1 | Current `bow_frog_hinge` motor torque command (`data.ctrl[5]`), N·m in [-1, 1] -- the state `action[5]` is a delta on; exact, no noise |
 | `action_history` | 18 | Last `n_stack=3` actions, flattened (`3 x action_size=6`) |
 | `force_history` | 3 | Last `n_stack=3` force readings as observed (noise included), flattened (`3 x force_dim=1`) -- the newest entry is this step's, so it repeats the `force` slot above |
 | **Total** | **52** | |

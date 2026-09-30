@@ -124,7 +124,7 @@ class ErhuEnv(MjxEnv):
     it's added to the torque already held in `data.ctrl` (MuJoCo carries
     ctrl from step to step, so no extra state is needed) scaled by
     `max_frog_torque_delta` (N*m per step), and clamped to the motor's
-    ctrlrange (+-0.2 N*m in arm.xml, exposed as `max_frog_torque`) -- i.e. a
+    ctrlrange (+-1 N*m in arm.xml, exposed as `max_frog_torque`) -- i.e. a
     torque-rate command, the analogue of action[:5]'s velocity command.
     Reset zeroes it, so each episode starts with a passive hinge (damping
     only). The current torque is part of the observation (see `_get_obs`),
@@ -160,7 +160,7 @@ class ErhuEnv(MjxEnv):
         traj_period_max: float = 6.0, # s, upper bound on the sampled sine-wave period.
         max_frog_torque_delta: float = 0.02, # N*m, max per-step change in the bow_frog_hinge motor torque --
                                               # action[5]'s analogue of `max_joint_vel`. At the default, a full
-                                              # -0.2 -> +0.2 N*m sweep takes 20 steps (0.8s at 25Hz).
+                                              # -1 -> +1 N*m sweep takes 100 steps (4s at 25Hz).
         reward_weights: Dict[str, float] = None,
         dr_pool_size: int = 1024,
         dr_pool_seed: int = 0,

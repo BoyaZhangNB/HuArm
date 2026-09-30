@@ -189,12 +189,12 @@
                  biastype="affine" biasprm="0 0 -30"/>
 
         <!-- Direct torque motor on bow_frog_hinge: ctrl is the hinge torque
-             in N*m, clamped to +-0.2. Declared last so it is ctrl[-1] /
+             in N*m, clamped to +-1. Declared last so it is ctrl[-1] /
              action[-1]; ErhuEnv drives it as a per-step delta on the held
              ctrl (see its action[5] docstring). ctrl = 0 leaves the hinge
              passive (damping only). -->
         <motor name="bow_frog_motor" joint="bow_frog_hinge" gear="1"
-               ctrllimited="true" ctrlrange="-0.2 0.2"/>
+               ctrllimited="true" ctrlrange="-1 1"/>
     </actuator>
 
     <include file="erhu.xml"/>

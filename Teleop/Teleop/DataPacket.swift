@@ -100,5 +100,5 @@ enum BowCommandLimits {
 /// huarm/arm.xml (ErhuEnv.max_frog_torque); teleop.py clips anything beyond
 /// it anyway.
 enum FrogTorqueLimits {
-    static let maxTorque: Double = 0.2       // N*m, symmetric
+    static let maxTorque: Double = 1.0       // N*m, symmetric
 }
