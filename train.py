@@ -1,3 +1,5 @@
+"""python3 -m train --config configs/train_sac_cpu.yaml --demo-dir"""
+
 import argparse
 import shutil
 from pathlib import Path
@@ -38,13 +40,13 @@ def main():
     )
     parser.add_argument(
         "--demo-dir", nargs="?", const="demonstrations", default=None,
-        help="Seed SACAgent's replay buffer with teleop.py demonstrations (demo_*.npz files "
-             "under this directory, default 'demonstrations' if flag given with no value) "
+        help="Load teleop.py demonstrations (demo_*.npz files under this directory, default "
+             "'demonstrations' if flag given with no value) into SACAgent's offline dataset "
              "before training starts, instead of/alongside --bc-checkpoint's supervised "
-             "warm start: this is RL *with* prior data rather than imitation -- the demo "
-             "(obs, action, reward, next_obs, done) transitions just become the oldest "
-             "entries already in the buffer, and training then proceeds completely normally "
-             "(see agents/sac_agent.py's `seed_buffer_overrides`). Only valid with `algo: sac`.",
+             "warm start: this is RL *with* prior data rather than imitation -- every gradient "
+             "step then mixes a minibatch from these demo (obs, action, reward, next_obs, done) "
+             "transitions with one from the online replay buffer (RLPD symmetric sampling, see "
+             "agents/sac_agent.py's `seed_buffer_overrides`). Only valid with `algo: sac`.",
     )
     args = parser.parse_args()
     cfg = load_config(args.config)
@@ -91,17 +93,18 @@ def main():
             print(f"[WARNING] {bc_obs_norm_path} not found; keeping untrained obs-normalization stats.")
         print(f"Warm-starting {algo} policy from BC checkpoint: {bc_path}")
 
-    # 2c. Optionally seed SACAgent's replay buffer with teleop.py
-    # demonstrations, so off-policy training starts with real expert
-    # transitions already in the buffer alongside whatever the (still
-    # randomly-initialized, unless --bc-checkpoint above was also given)
-    # policy collects itself -- see agents/sac_agent.py's
-    # `seed_buffer_overrides` module-level docstring for why this is RL
-    # with prior data rather than a second flavor of BC.
+    # 2c. Optionally load teleop.py demonstrations into SACAgent's offline
+    # dataset, so off-policy training uses RLPD's symmetric sampling: every
+    # gradient step mixes minibatches from these demos with minibatches from
+    # the online replay buffer the (still randomly-initialized, unless
+    # --bc-checkpoint above was also given) policy fills as it collects its
+    # own rollouts -- see agents/sac_agent.py's `seed_buffer_overrides`
+    # module-level docstring for why this is RL with prior data rather than
+    # a second flavor of BC.
     if args.demo_dir:
         if algo != "sac":
             raise ValueError(
-                f"--demo-dir seeds SACAgent's replay buffer and doesn't apply to algo={algo!r} "
+                f"--demo-dir seeds SACAgent's offline dataset and doesn't apply to algo={algo!r} "
                 "(no replay buffer to seed); drop --demo-dir or switch to `algo: sac`."
             )
         demo = load_demo_transitions(args.demo_dir)
@@ -119,8 +122,8 @@ def main():
         )
         init_overrides = {**(init_overrides or {}), **demo_overrides}
         print(
-            f"Seeded SAC replay buffer with {demo.obs.shape[0]} demo transitions "
-            f"from {args.demo_dir}"
+            f"Loaded {demo.obs.shape[0]} demo transitions from {args.demo_dir} into "
+            "SAC's offline dataset"
         )
 
     # 3. Train. Swapping `agent` swaps the whole algorithm; swapping the

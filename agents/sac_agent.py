@@ -22,6 +22,12 @@ produces each iteration, pushes those transitions into a fixed-capacity
 replay buffer carried inside `train_state`, then runs its own sampled
 gradient steps against that buffer. `training_interface.py`'s generic
 `rollout()`/`train()`/`eval()` never need to know the difference.
+
+With prior data (`seed_buffer_overrides`), demos live in a separate
+offline buffer and each minibatch follows RLPD's symmetric sampling
+(Ball et al. 2023): `offline_ratio` (default 50%) of it is drawn from the
+offline demos and the rest from the online replay buffer, concatenated
+into one training batch.
 """
 
 from __future__ import annotations
@@ -121,6 +127,7 @@ class SACAgent(Agent):
         alpha_max_grad_norm: float = 1.0,
         log_alpha_min: float = -10.0,
         log_alpha_max: float = 2.0,
+        offline_ratio: float = 0.5,
     ):
         self.obs_size = obs_size
         self.action_size = action_size
@@ -133,6 +140,13 @@ class SACAgent(Agent):
         self.buffer_capacity = buffer_capacity
         self.gradient_steps = gradient_steps
         self.min_buffer_size = min_buffer_size
+        # RLPD symmetric sampling: how each minibatch splits between the
+        # offline (demo) buffer and the online replay buffer, whenever
+        # `seed_buffer_overrides` has populated the former (see update()).
+        if not 0.0 <= offline_ratio <= 1.0:
+            raise ValueError(f"offline_ratio must be in [0, 1], got {offline_ratio}")
+        self.offline_batch_size = int(round(batch_size * offline_ratio))
+        self.online_batch_size = batch_size - self.offline_batch_size
         self.target_entropy = (
             -float(action_size) if target_entropy is None else target_entropy
         )
@@ -184,7 +198,7 @@ class SACAgent(Agent):
             "q1_opt_state": self.q1_optimizer.init(q1_params),
             "q2_opt_state": self.q2_optimizer.init(q2_params),
             "alpha_opt_state": self.alpha_optimizer.init(log_alpha),
-            # Fixed-capacity ring buffer of past transitions.
+            # Fixed-capacity ring buffer of past (online) transitions.
             "buf_obs": jp.zeros((capacity, self.obs_size), dtype=jp.float32),
             "buf_action": jp.zeros((capacity, self.action_size), dtype=jp.float32),
             "buf_reward": jp.zeros((capacity,), dtype=jp.float32),
@@ -193,6 +207,15 @@ class SACAgent(Agent):
             "buf_done": jp.zeros((capacity,), dtype=jp.float32),
             "write_ptr": jp.zeros((), dtype=jp.int32),
             "buffer_size": jp.zeros((), dtype=jp.int32),
+            # Offline (demo) dataset, kept apart from the online ring buffer
+            # so rollouts never overwrite it. Empty unless
+            # `seed_buffer_overrides` fills it; update() reads its static
+            # leading dim to decide whether to use RLPD symmetric sampling.
+            "off_obs": jp.zeros((0, self.obs_size), dtype=jp.float32),
+            "off_action": jp.zeros((0, self.action_size), dtype=jp.float32),
+            "off_reward": jp.zeros((0,), dtype=jp.float32),
+            "off_next_obs": jp.zeros((0, self.obs_size), dtype=jp.float32),
+            "off_done": jp.zeros((0,), dtype=jp.float32),
             "rng": rng,
             "obs_norm": init_running_norm(self.obs_size),
         }
@@ -206,62 +229,39 @@ class SACAgent(Agent):
         demo_done,
         obs_norm: RunningNorm | None = None,
     ) -> Dict[str, Any]:
-        """Build `train_state` overrides that pre-load demonstration
-        transitions (demonstrations/demo_buffer.py's `load_demo_transitions`)
-        into the replay ring buffer, for train.py's `--demo-dir` flag.
+        """Build `train_state` overrides that load demonstration transitions
+        (demonstrations/demo_buffer.py's `load_demo_transitions`) as the
+        offline dataset for RLPD-style training, for train.py's `--demo-dir`
+        flag.
 
         This is reinforcement learning *with* prior data, not behavior
-        cloning: nothing here touches actor/critic params. The demo
-        transitions just become the oldest entries already sitting in the
-        buffer before training starts, so `update()` samples them in the
-        same minibatches as every rollout transition collected afterwards
-        (see its `grad_step`'s `sample_idx`) -- early gradient steps get
-        real expert `(obs, action, reward, next_obs, done)` tuples to
-        critic-fit against instead of only random-policy rollouts, and
-        training then proceeds completely normally (nothing in
-        training_interface.py or `update()` needs to change).
+        cloning: nothing here touches actor/critic params. The demos go into
+        a separate, never-overwritten offline buffer (`off_*`), and every
+        gradient step in `update()` concatenates an `offline_batch_size`
+        minibatch from it with an `online_batch_size` minibatch from the
+        online ring buffer (RLPD's symmetric sampling, 50/50 by default) --
+        so the critic keeps fitting real expert `(obs, action, reward,
+        next_obs, done)` tuples for the whole run while adapting to the
+        policy's own rollouts. The online buffer still has to reach
+        `min_buffer_size` before updates start.
 
         `obs_norm`, if given, is the running obs-normalization estimate to
         fold the demo observations into (e.g. one already restored from a
         `--bc-checkpoint`); defaults to a fresh `init_running_norm` otherwise.
         """
-        capacity = self.buffer_capacity
-        n = demo_obs.shape[0]
-        if n > capacity:
-            raise ValueError(
-                f"{n} demo transitions exceed buffer_capacity={capacity}; raise "
-                "buffer_capacity in configs/*.yaml's `agent` block or trim the demo set."
-            )
-
-        idx = jp.arange(n)
-        buf_obs = jp.zeros((capacity, self.obs_size), dtype=jp.float32).at[idx].set(
-            jp.asarray(demo_obs, dtype=jp.float32)
-        )
-        buf_action = jp.zeros((capacity, self.action_size), dtype=jp.float32).at[idx].set(
-            jp.asarray(demo_action, dtype=jp.float32)
-        )
-        buf_reward = jp.zeros((capacity,), dtype=jp.float32).at[idx].set(
-            jp.asarray(demo_reward, dtype=jp.float32)
-        )
-        buf_next_obs = jp.zeros((capacity, self.obs_size), dtype=jp.float32).at[idx].set(
-            jp.asarray(demo_next_obs, dtype=jp.float32)
-        )
-        buf_done = jp.zeros((capacity,), dtype=jp.float32).at[idx].set(
-            jp.asarray(demo_done, dtype=jp.float32)
-        )
+        if demo_obs.shape[0] == 0:
+            raise ValueError("No demo transitions to seed the offline buffer with.")
 
         if obs_norm is None:
             obs_norm = init_running_norm(self.obs_size)
         obs_norm = update_running_norm(obs_norm, jp.asarray(demo_obs, dtype=jp.float32))
 
         return {
-            "buf_obs": buf_obs,
-            "buf_action": buf_action,
-            "buf_reward": buf_reward,
-            "buf_next_obs": buf_next_obs,
-            "buf_done": buf_done,
-            "write_ptr": jp.asarray(n % capacity, dtype=jp.int32),
-            "buffer_size": jp.asarray(n, dtype=jp.int32),
+            "off_obs": jp.asarray(demo_obs, dtype=jp.float32),
+            "off_action": jp.asarray(demo_action, dtype=jp.float32),
+            "off_reward": jp.asarray(demo_reward, dtype=jp.float32),
+            "off_next_obs": jp.asarray(demo_next_obs, dtype=jp.float32),
+            "off_done": jp.asarray(demo_done, dtype=jp.float32),
             "obs_norm": obs_norm,
         }
 
@@ -318,6 +318,16 @@ class SACAgent(Agent):
         new_write_ptr = (write_ptr + total) % capacity
         new_buffer_size = jp.minimum(train_state["buffer_size"] + total, capacity)
 
+        # Offline (demo) dataset: static size, so whether to mix it in is a
+        # trace-time decision rather than a jax.lax.cond.
+        off_obs = train_state["off_obs"]
+        off_action = train_state["off_action"]
+        off_reward = train_state["off_reward"]
+        off_next_obs = train_state["off_next_obs"]
+        off_done = train_state["off_done"]
+        n_offline = off_obs.shape[0]
+        use_offline = n_offline > 0
+
         # Fold this iteration's raw observations into the running estimate
         # before sampling minibatches below, so every gradient step in this
         # call (old buffer entries included) normalizes with the freshest
@@ -346,17 +356,33 @@ class SACAgent(Agent):
                 log_alpha, actor_opt_state, q1_opt_state, q2_opt_state, alpha_opt_state,
             ) = carry
 
-            idx_rng, next_a_rng, a_rng = jax.random.split(step_rng, 3)
-            sample_idx = jax.random.randint(
-                idx_rng, (self.batch_size,), 0, new_buffer_size
-            )
+            idx_rng, off_idx_rng, next_a_rng, a_rng = jax.random.split(step_rng, 4)
+            if use_offline:
+                # RLPD symmetric sampling: distinct minibatches from the
+                # online buffer and the offline dataset, concatenated into
+                # one training batch.
+                on_idx = jax.random.randint(
+                    idx_rng, (self.online_batch_size,), 0, new_buffer_size
+                )
+                off_idx = jax.random.randint(
+                    off_idx_rng, (self.offline_batch_size,), 0, n_offline
+                )
+                sample = lambda on_buf, off_buf: jp.concatenate(
+                    [on_buf[on_idx], off_buf[off_idx]], axis=0
+                )
+            else:
+                sample_idx = jax.random.randint(
+                    idx_rng, (self.batch_size,), 0, new_buffer_size
+                )
+                sample = lambda on_buf, off_buf: on_buf[sample_idx]
+
             # Buffers hold raw observations regardless of when they were
             # collected; normalize with the freshest running stats here.
-            mb_obs = normalize_obs(new_obs_norm, buf_obs[sample_idx])
-            mb_action = buf_action[sample_idx]
-            mb_reward = buf_reward[sample_idx]
-            mb_next_obs = normalize_obs(new_obs_norm, buf_next_obs[sample_idx])
-            mb_done = buf_done[sample_idx]
+            mb_obs = normalize_obs(new_obs_norm, sample(buf_obs, off_obs))
+            mb_action = sample(buf_action, off_action)
+            mb_reward = sample(buf_reward, off_reward)
+            mb_next_obs = normalize_obs(new_obs_norm, sample(buf_next_obs, off_next_obs))
+            mb_done = sample(buf_done, off_done)
 
             alpha = jp.exp(log_alpha)
 
@@ -492,6 +518,11 @@ class SACAgent(Agent):
             "buf_done": buf_done,
             "write_ptr": new_write_ptr,
             "buffer_size": new_buffer_size,
+            "off_obs": off_obs,
+            "off_action": off_action,
+            "off_reward": off_reward,
+            "off_next_obs": off_next_obs,
+            "off_done": off_done,
             "rng": rng,
             "obs_norm": new_obs_norm,
         }
