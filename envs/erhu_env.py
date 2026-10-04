@@ -32,24 +32,24 @@ def init_traj_info(
     rng: jax.Array, x0: jax.Array, v_limit: float, p_min: float, p_max: float,
     accel_range: Tuple[float, float], period_range: Tuple[float, float],
 ) -> Dict[str, jax.Array]:
-    return utils_traj_simple.init_traj_info(rng, p_min, p_max, period_range)
-    # return utils_traj.init_traj_info(rng, x0, v_limit, p_min, p_max, accel_range)
+    # return utils_traj_simple.init_traj_info(rng, p_min, p_max, period_range)
+    return utils_traj.init_traj_info(rng, x0, v_limit, p_min, p_max, accel_range)
 
 
 def query_traj(
     info: Dict[str, Any], t: jax.Array, x: jax.Array,
     v_limit: jax.Array, p_min: jax.Array, p_max: jax.Array,
 ) -> Tuple[jax.Array, jax.Array]:
-    return utils_traj_simple.query_traj(info, t, v_limit, p_min, p_max)
-    # return utils_traj.query_traj(info, x, v_limit, p_min, p_max)
+    # return utils_traj_simple.query_traj(info, t, v_limit, p_min, p_max)
+    return utils_traj.query_traj(info, x, v_limit, p_min, p_max)
 
 
 def maybe_resample_traj(
     info: Dict[str, Any], x: jax.Array, v_limit: float, p_min: float, p_max: float,
     accel_range: Tuple[float, float], margin: float,
 ) -> Dict[str, Any]:
-    return info
-    # return utils_traj.maybe_resample(info, x, v_limit, p_min, p_max, accel_range, margin=margin)
+    # return info
+    return utils_traj.maybe_resample(info, x, v_limit, p_min, p_max, accel_range, margin=margin)
 
 
 def desired_velocity_and_pressure(

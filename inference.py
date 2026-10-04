@@ -62,6 +62,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -301,9 +302,44 @@ def main() -> None:
 
         begin = input("Press Enter to start the simulation and begin logging metrics...")
 
+        # Lets the operator force a reset at any time by pressing Enter at the
+        # terminal, without blocking the sim loop on stdin -- a background
+        # thread just sets a flag the loop polls each iteration.
+        manual_reset_requested = threading.Event()
+
+        def _listen_for_reset() -> None:
+            while True:
+                try:
+                    input()
+                except EOFError:
+                    break
+                manual_reset_requested.set()
+
+        threading.Thread(target=_listen_for_reset, daemon=True).start()
+        print("Press Enter at any time to reset the simulation.")
+
+        def do_reset() -> None:
+            nonlocal state, rng, start, next_log, metrics_logger
+            rng, reset_rng = jax.random.split(rng)
+            state = env.reset(reset_rng)
+            mjx.get_data_into(data, model, state.pipeline_state)
+            viewer.sync()
+            start = time.time()
+            next_log = 0.0
+            # Fresh logger per episode so the plot/live window doesn't overlay
+            # this episode's metrics on top of the previous one's.
+            metrics_logger.close()
+            metrics_logger = MetricsLogger(live=True)
 
         try:
             while viewer.is_running():
+                if manual_reset_requested.is_set():
+                    manual_reset_requested.clear()
+                    synth.update(0.0, 0.0, 0.0)
+                    print("\nManual reset requested")
+                    do_reset()
+                    continue
+
                 elapsed_real = time.time() - start
                 print(f"Sim time {data.time:.3f}, elapsed real time {elapsed_real:.3f}, "
                       f"cmd v={command_velocity:+.4f} m/s p={command_pressure:.3f} N", end="\r")
@@ -349,8 +385,10 @@ def main() -> None:
                 synth.update_from_state(state, bow_x=float(_bow_x(state.pipeline_state)))
                 if state.done:
                     synth.update(0.0, 0.0, 0.0)
-                    print("\nEpisode terminated")
-                    break
+                    print("\nEpisode terminated; resetting in 5s...")
+                    time.sleep(5.0)
+                    do_reset()
+                    continue
                 mjx.get_data_into(data, model, state.pipeline_state)
                 viewer.sync()
 
