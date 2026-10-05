@@ -7,9 +7,11 @@ Randomized every `reset()` (see `domain_randomize`):
 
     bow weight          one factor for the whole bow assembly, on top of the
                         per-body mass jitter applied to the rest of the model.
-    actuator params     velocity-actuator gain (kv) and the first-order
+    actuator params     position-servo gains (kp/kv) and the first-order
                         filter time constant that stands in for actuation
-                        delay -- see `arm.xml`'s <actuator> block.
+                        delay -- see `arm.xml`'s <actuator> block. (MuJoCo's
+                        position servo is a PD, not a PID: there is no
+                        integral term to randomize.)
     erhu pose           where the instrument sits, drawn from the pre-solved
                         pool in `utils_envs.build_erhu_pose_pool`, plus a slow
                         drift over the episode -- see `sample_erhu_drift`.
@@ -60,7 +62,8 @@ class DomainRandConfig:
     mass_range: Tuple[float, float] = (0.8, 1.2)            # all bodies
     bow_mass_range: Tuple[float, float] = (0.7, 1.3)        # extra factor, whole bow
     damping_range: Tuple[float, float] = (0.8, 1.2)         # joint damping
-    actuator_gain_range: Tuple[float, float] = (0.85, 1.15)  # velocity gain kv, per actuator
+    actuator_gain_range: Tuple[float, float] = (0.85, 1.15)  # kp, per actuator
+    actuator_damping_range: Tuple[float, float] = (0.8, 1.25)  # kv, per actuator
     actuator_delay_range: Tuple[float, float] = (0.6, 1.6)  # filter time constant
     # Contact compliance -- bow-hair/string pairs only, see `randomize_model`.
     solref_time_range: Tuple[float, float] = (0.7, 1.4)
@@ -163,14 +166,18 @@ def randomize_model(mjx_model, rng: jax.Array, cfg: DomainRandConfig,
 
     dof_damping = m.dof_damping * _factor(keys[5], m.dof_damping.shape, cfg.damping_range)
 
-    # Velocity actuators: force = gainprm[0]*act + biasprm[2]*qvel, i.e.
-    # kv*(act - qvel), so gainprm[0] and biasprm[2] are the *same* gain and
-    # have to be scaled together. dynprm[0] is the ctrl low-pass time
-    # constant -- the actuation delay.
+    # Position servos: force = gainprm[0]*act + biasprm[1]*qpos +
+    # biasprm[2]*qvel, i.e. kp*(act - qpos) - kv*qvel, so gainprm[0] and
+    # biasprm[1] are the *same* gain and have to be scaled together.
+    # dynprm[0] is the ctrl low-pass time constant -- the actuation delay.
+    # (The frog torque motor has zero biasprm, so only its gainprm[0] --
+    # its torque constant -- is affected.)
     nu = m.actuator_gainprm.shape[0]
-    kv_factor = _factor(keys[6], (nu,), cfg.actuator_gain_range)
-    actuator_gainprm = m.actuator_gainprm.at[:, 0].multiply(kv_factor)
-    actuator_biasprm = m.actuator_biasprm.at[:, 2].multiply(kv_factor)
+    kp_factor = _factor(keys[6], (nu,), cfg.actuator_gain_range)
+    actuator_gainprm = m.actuator_gainprm.at[:, 0].multiply(kp_factor)
+    actuator_biasprm = m.actuator_biasprm.at[:, 1].multiply(kp_factor)
+    actuator_biasprm = actuator_biasprm.at[:, 2].multiply(
+        _factor(keys[7], (nu,), cfg.actuator_damping_range))
     actuator_dynprm = m.actuator_dynprm.at[:, 0].multiply(
         _factor(keys[8], (nu,), cfg.actuator_delay_range))
 
@@ -295,7 +302,7 @@ def domain_randomize(mjx_model, mjx_data, rng: jax.Array, erhu_pose_pool,
     the pool is built instead (see `utils_envs.build_erhu_pose_pool`).
     """
     model_rng, pool_rng, drift_rng = jax.random.split(rng, 3)
-    qpos_idxs, ctrl_aids, act_idxs = arm_idxs
+    qpos_idxs, servo_idxs, act_idxs, other_aids = arm_idxs
 
     pose = sample_erhu_pose_pool(erhu_pose_pool, pool_rng)
     dr_params = dict(body_pos=pose["body_pos"], body_quat=pose["body_quat"])
@@ -307,6 +314,6 @@ def domain_randomize(mjx_model, mjx_data, rng: jax.Array, erhu_pose_pool,
 
     mjx_data = mjx_data.replace(qpos=mjx_data.qpos.at[qpos_idxs].set(pose["arm_qpos"]))
     mjx_data = mjx.forward(mjx_model.replace(**dr_params), mjx_data)
-    mjx_data = set_joint_ctrl_jax(mjx_data, ctrl_aids, act_idxs)
+    mjx_data = set_joint_ctrl_jax(mjx_data, servo_idxs, act_idxs, other_aids)
 
     return dr_params, drift, mjx_data

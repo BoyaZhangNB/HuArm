@@ -108,13 +108,11 @@ DEFAULT_OBS_NOISE = {
 class ErhuEnv(MjxEnv):
     """Erhu bowing task for the HuArm robot. n_frames is frame_skip.
 
-    Action space: joint-space velocity control. action[:5] in [-1, 1]^5 is a
-    normalized joint velocity command for the 5 arm velocity actuators
-    (joint1, joint2, joint5, joint3, joint4 -- actuator order), scaled by
-    `max_joint_vel` (rad/s) and written to ctrl as an absolute target each
-    step -- not a delta on the previous one. The actuators (see arm.xml)
-    have no position term, so a zero command does not hold a pose against
-    gravity or string load; the policy closes the position loop itself.
+    Action space: joint-space position control. action[:5] in [-1, 1]^5 is a
+    normalized *delta* on the 5 arm position servos' targets (joint1,
+    joint2, joint5, joint3, joint4 -- actuator order), scaled by
+    `max_ctrl_delta` (rad) and added to the target already held in
+    `data.ctrl`, so a zero action holds the current target.
 
     ctrl is clamped to `mjx_model.actuator_ctrlrange` each step.
 
@@ -125,7 +123,7 @@ class ErhuEnv(MjxEnv):
     ctrl from step to step, so no extra state is needed) scaled by
     `max_frog_torque_delta` (N*m per step), and clamped to the motor's
     ctrlrange (+-1 N*m in arm.xml, exposed as `max_frog_torque`) -- i.e. a
-    torque-rate command, the analogue of action[:5]'s velocity command.
+    torque-rate command, the same delta scheme as action[:5].
     Reset zeroes it, so each episode starts with a passive hinge (damping
     only). The current torque is part of the observation (see `_get_obs`),
     so the policy always sees the state its delta acts on.
@@ -137,8 +135,7 @@ class ErhuEnv(MjxEnv):
         n_frames: int = 20, # timestep 0.002 * 20 = 0.04s per step, 25Hz
         n_stack: int = 3,
         enable_forbidden_zone: bool = True,
-        max_joint_vel: float = 1.25, # rad/s at |action| = 1 -- the old position-delta setup's 0.05 rad per
-                                     # 0.04 s step, so old normalized actions map 1:1 onto velocity commands.
+        max_ctrl_delta: float = 0.05, # rad, max per-step change in each arm servo target -- 1.25 rad/s at 25Hz.
         episode_time_limit: float = 100.0,
         f_max: float = 10.0,
         f_safe: float = 3.0,
@@ -159,7 +156,7 @@ class ErhuEnv(MjxEnv):
         traj_period_min: float = 4.0, # s, lower bound on the sampled sine-wave period -- see utils_traj_simple.
         traj_period_max: float = 6.0, # s, upper bound on the sampled sine-wave period.
         max_frog_torque_delta: float = 0.02, # N*m, max per-step change in the bow_frog_hinge motor torque --
-                                              # action[5]'s analogue of `max_joint_vel`. At the default, a full
+                                              # action[5]'s analogue of `max_ctrl_delta`. At the default, a full
                                               # -1 -> +1 N*m sweep takes 100 steps (4s at 25Hz).
         reward_weights: Dict[str, float] = None,
         dr_pool_size: int = 1024,
@@ -187,7 +184,7 @@ class ErhuEnv(MjxEnv):
 
         self.n_stack = n_stack
         self.enable_forbidden_zone = enable_forbidden_zone
-        self.max_joint_vel = max_joint_vel
+        self.max_ctrl_delta = max_ctrl_delta
         self.episode_time_limit = episode_time_limit
         self.f_max = f_max
         self.f_safe = f_safe
@@ -732,15 +729,16 @@ class ErhuEnv(MjxEnv):
             state.info["dr_params"], state.info["erhu_drift"], prev_data.time
         )
 
-        # action[:5]: absolute joint velocity command (rad/s). action[5]: a
-        # delta on the bow_frog_hinge motor torque already held in ctrl
-        # (N*m) -- see the class docstring. Both land in ctrl, clamped to
-        # the actuators' ctrlrange (which bounds the torque to
-        # +-max_frog_torque).
-        ctrl = jp.concatenate([
-            action[:-1] * self.max_joint_vel,
-            prev_data.ctrl[self._frog_aid:] + action[-1:] * self.max_frog_torque_delta,
+        # action[:5]: a delta on the arm servo targets already held in ctrl
+        # (rad). action[5]: a delta on the bow_frog_hinge motor torque
+        # already held in ctrl (N*m) -- see the class docstring. Both land in
+        # ctrl, clamped to the actuators' ctrlrange (which bounds the targets
+        # to the joint range and the torque to +-max_frog_torque).
+        delta_scale = jp.concatenate([
+            jp.full((self._frog_aid,), self.max_ctrl_delta),
+            jp.asarray([self.max_frog_torque_delta]),
         ])
+        ctrl = prev_data.ctrl + action * delta_scale
         ctrl = jp.clip(ctrl, self._ctrl_lo, self._ctrl_hi)
 
         data = self.pipeline_step(prev_data, ctrl, model=model)

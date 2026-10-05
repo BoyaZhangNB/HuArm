@@ -14,6 +14,16 @@ docstring and train.py's save step), plus a "<path>_obs_norm.npz" sidecar of
 running observation-normalization stats. So loading either kind only takes
 knowing which algo it was trained as; --checkpoint accepts either path.
 
+train.py also copies the exact YAML config a run was trained with into the
+checkpoint directory itself. When one is found there, it is loaded and used
+to restore everything that run was built with: `algo` (so --algo can be
+omitted), the `env:` section as ErhuEnv kwargs (xml_path, n_frames,
+max_ctrl_delta, traj_*, reward_weights, dr_config, obs_noise, ...) and the
+`agent:` section as agent kwargs (hidden_dim, ...). Only the inference-time
+knobs are overridden on top: episode_time_limit (--episode-time-limit),
+dr_pool_size, the SAC replay-buffer size, and xml_path if --xml is given.
+BC checkpoints carry no such config, so they fall back to the defaults.
+
 The bow target the policy chases is set by hand, live, from the operator's
 phone -- the same streaming setup teleop.py uses for position, one JSON
 object per UDP datagram:
@@ -73,6 +83,7 @@ import jax
 import jax.numpy as jp
 import numpy as np
 import orbax.checkpoint as ocp
+import yaml
 from mujoco import mjx
 
 from agents.obs_normalizer import RunningNorm
@@ -130,14 +141,33 @@ def clip_command(env: ErhuEnv, velocity: float, pressure: float) -> tuple[float,
     )
 
 
-def build_agent(algo: str, obs_size: int, action_size: int) -> Agent:
+def load_checkpoint_config(checkpoint_path: Path) -> dict | None:
+    """Return the training YAML config train.py copied into `checkpoint_path`
+    (see train.py's save step), or None if there isn't exactly one -- e.g.
+    for bc/train_bc.py checkpoints, which don't save one."""
+    configs = sorted(checkpoint_path.glob("*.yaml")) + sorted(checkpoint_path.glob("*.yml"))
+    if len(configs) != 1:
+        if configs:
+            print(f"[WARNING] multiple configs in {checkpoint_path} ({[c.name for c in configs]}); "
+                  "ignoring them and using default env/agent parameters.")
+        else:
+            print(f"[WARNING] no training config found in {checkpoint_path}; "
+                  "using default env/agent parameters.")
+        return None
+    print(f"Restoring env/agent parameters from {configs[0]}")
+    with open(configs[0]) as f:
+        return yaml.safe_load(f)
+
+
+def build_agent(algo: str, obs_size: int, action_size: int, agent_cfg: dict | None = None) -> Agent:
+    agent_kwargs = dict(agent_cfg or {})
     if algo == "sac":
         # Inference never calls SACAgent.update(), so the (obs_size *
         # buffer_capacity)-sized replay buffer agent.init() would otherwise
         # allocate (500_000 by default) is pure waste here -- shrink it to
         # the minimum instead of paying for training-only state.
-        return SACAgent(obs_size=obs_size, action_size=action_size, buffer_capacity=1)
-    return AGENT_CLASSES[algo](obs_size=obs_size, action_size=action_size)
+        agent_kwargs["buffer_capacity"] = 1
+    return AGENT_CLASSES[algo](obs_size=obs_size, action_size=action_size, **agent_kwargs)
 
 
 def load_policy(agent: Agent, algo: str, checkpoint_path: Path, seed: int = 0) -> Any:
@@ -170,8 +200,9 @@ def parse_args() -> argparse.Namespace:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
-        "--algo", choices=sorted(AGENT_CLASSES), default="ppo",
-        help="Policy architecture the checkpoint was trained with (default: ppo).",
+        "--algo", choices=sorted(AGENT_CLASSES), default=None,
+        help="Policy architecture the checkpoint was trained with. Default: the `algo` in "
+             "the checkpoint's saved training config, else ppo.",
     )
     parser.add_argument(
         "--checkpoint", default=None,
@@ -181,8 +212,9 @@ def parse_args() -> argparse.Namespace:
              "(sac), matching train.py's default --config checkpoint_path.",
     )
     parser.add_argument(
-        "--xml", default="huarm/arm.xml",
-        help="Path to the MuJoCo model XML for ErhuEnv (default: huarm/arm.xml).",
+        "--xml", default=None,
+        help="Path to the MuJoCo model XML for ErhuEnv, overriding the checkpoint config's "
+             "env.xml_path (default: the config's, else huarm/arm.xml).",
     )
     parser.add_argument(
         "--stochastic", action="store_true",
@@ -242,7 +274,7 @@ def parse_args() -> argparse.Namespace:
         help="sounddevice output device name or index; default is the system default",
     )
     args = parser.parse_args()
-    args.checkpoint = Path(args.checkpoint or DEFAULT_CHECKPOINTS[args.algo]).resolve()
+    args.checkpoint = Path(args.checkpoint or DEFAULT_CHECKPOINTS[args.algo or "ppo"]).resolve()
     return args
 
 
@@ -250,8 +282,25 @@ def main() -> None:
     args = parse_args()
     print(f"Using MuJoCo Version: {mujoco.__version__}")
 
-    env = ErhuEnv(xml_path=args.xml, episode_time_limit=args.episode_time_limit, dr_pool_size=32)
-    agent = build_agent(args.algo, env.observation_size, env.action_size)
+    # Rebuild the env and agent exactly as the checkpoint was trained (see
+    # module docstring), overriding only inference-time knobs.
+    cfg = load_checkpoint_config(args.checkpoint) or {}
+    cfg_algo = cfg.get("algo", "ppo" if cfg else None)
+    if args.algo is None:
+        args.algo = cfg_algo or "ppo"
+    elif cfg_algo is not None and args.algo != cfg_algo:
+        raise ValueError(f"--algo {args.algo} but {args.checkpoint} was trained with algo={cfg_algo}")
+
+    env_kwargs = dict(cfg.get("env") or {})
+    # Training-loop wrapper settings (see train.py / utils.make_env), not ErhuEnv kwargs.
+    env_kwargs.pop("num_envs", None)
+    env_kwargs.pop("episode_length", None)
+    if args.xml is not None:
+        env_kwargs["xml_path"] = args.xml
+    env_kwargs["episode_time_limit"] = args.episode_time_limit
+    env_kwargs["dr_pool_size"] = 32
+    env = ErhuEnv(**env_kwargs)
+    agent = build_agent(args.algo, env.observation_size, env.action_size, cfg.get("agent"))
 
     print(f"Loading {args.algo} checkpoint from {args.checkpoint}...")
     train_state = load_policy(agent, args.algo, args.checkpoint, seed=args.seed)

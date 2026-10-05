@@ -20,8 +20,8 @@ relative to. Each control
 step, (x, y, z) is solved via damped least-squares IK (reusing
 `utils.jacobian_ik`, the same routine the env's own pose-pool/domain-
 randomization code uses) into arm joint angles, converted into the env's
-normalized joint-velocity action space -- the velocity that closes the gap
-from the current pose in one env step (plus a bow_frog_hinge torque delta,
+normalized delta-ctrl action space -- the change in the arm servos' held
+targets that moves them onto the IK solution (plus a bow_frog_hinge torque delta,
 action[5], tracking `torque` as its target -- see `solve_ik`/action[5]
 handling below), and applied through `ErhuEnv.step` -- never by poking
 `data.ctrl` directly -- so the physics,
@@ -425,33 +425,30 @@ def make_synth(enabled: bool, device=None):
 ARM_JOINT_NAMES = ("joint1", "joint2", "joint5", "joint3", "joint4")
 
 
-def solve_ik(model, ik_data, current_qpos, target_world_pos):
+def solve_ik(model, ik_data, current_qpos, target_world_pos, prev_ctrl):
     """Damped-least-squares IK for the arm's 5 joints, warm-started from
     `current_qpos` (the arm's current live pose) so each call only has to
     correct a small per-step delta -- fast enough for a real-time control
     loop.
 
-    Returns a ctrl-shaped (nu,) pair of (target, current) joint angles,
-    scattered by actuator id (so it does not depend on ARM_JOINT_NAMES
-    happening to be in the same order as the model's actuators); any
-    actuator not driven by one of ARM_JOINT_NAMES gets target == current,
-    i.e. a zero velocity command."""
+    Returns a full ctrl-shaped vector of target joint angles, scattered by
+    actuator id (so it does not depend on ARM_JOINT_NAMES happening to be in
+    the same order as the model's actuators); any actuator not driven by one
+    of ARM_JOINT_NAMES keeps its previous value from `prev_ctrl`."""
     ik_data.qpos[:] = current_qpos
     body_points = [("end_effector", np.zeros(3), 1.0)]
     jacobian_ik(
         model, ik_data, body_points, target_world_pos, list(ARM_JOINT_NAMES),
         max_iters=20, damping=1e-2, step_clip=0.05, tol=1e-4,
     )
-    target_q = np.zeros(model.nu)
-    current_q = np.zeros(model.nu)
+    target_ctrl = np.array(prev_ctrl, dtype=np.float64)
     for jn in ARM_JOINT_NAMES:
         aid = joint_to_actuator_id(model, jn)
         if aid < 0:
             continue
         adr = model.jnt_qposadr[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn)]
-        target_q[aid] = ik_data.qpos[adr]
-        current_q[aid] = current_qpos[adr]
-    return target_q, current_q
+        target_ctrl[aid] = ik_data.qpos[adr]
+    return target_ctrl
 
 
 def main():
@@ -587,20 +584,22 @@ def main():
                         ) / 1.5
                         target = ee_origin + offset
 
+                        prev_ctrl = np.array(state.pipeline_state.ctrl)
                         current_qpos = np.array(state.pipeline_state.qpos)
-                        target_q, current_q = solve_ik(model, ik_data, current_qpos, target)
+                        target_ctrl = solve_ik(model, ik_data, current_qpos, target, prev_ctrl)
 
-                        # Joint velocity that reaches the IK solution in one
-                        # env step, normalized by the env's velocity scale.
+                        # Servo-target delta that moves the held targets
+                        # onto the IK solution, normalized by the env's
+                        # per-step delta scale.
                         arm_action = np.clip(
-                            (target_q - current_q) / env.dt / env.max_joint_vel, -1.0, 1.0
+                            (target_ctrl - prev_ctrl) / env.max_ctrl_delta, -1.0, 1.0
                         )
                         # action[5]: delta-toward-target conversion against
                         # the operator's live `torque` target (an absolute
                         # N*m value, not a delta-from-origin like x/y/z) and
                         # the torque the frog motor currently holds in ctrl.
-                        # solve_ik leaves that motor's slot at 0, so it's
-                        # simply overwritten here.
+                        # solve_ik leaves that motor's slot at prev_ctrl, so
+                        # it's simply overwritten here.
                         target_frog_torque = float(
                             np.clip(pkt["torque"], -env.max_frog_torque, env.max_frog_torque)
                         )

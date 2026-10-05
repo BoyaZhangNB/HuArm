@@ -8,7 +8,7 @@ so RL fine-tuning (`train.py`) can start from a policy that already roughly
 reproduces expert bowing behavior instead of random noise.
 
 Both agents' policies are tanh-squashed Gaussians over the same
-`[-1, 1]^action_size` normalized joint-velocity action space `teleop.py` already
+`[-1, 1]^action_size` normalized delta-ctrl action space `teleop.py` already
 logs `action` in (see envs/erhu_env.py's docstring and teleop.py's module
 docstring: "a BC/DAgger policy trained on these demos ... must reproduce
 actions in the exact same space"). So the natural BC loss is the negative
