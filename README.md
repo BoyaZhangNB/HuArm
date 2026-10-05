@@ -9,7 +9,7 @@ A robot arm that plays Erhu
 
 | Dim | Actuator | Description |
 |---|---|---|
-| 0-4 | `joint1, joint2, joint5, joint3, joint4` position servos | *Delta* on the servo targets held in `data.ctrl`, scaled by `max_ctrl_delta` (0.05 rad/step, i.e. 1.25 rad/s) and clamped to the ctrlrange of ±3.14 rad. A zero action holds the current target |
+| 0-4 | `joint1, joint2, joint5, joint3, joint4` velocity servos | Absolute joint velocity command, scaled by `max_joint_vel` (1.25 rad/s). No position term: a zero command doesn't hold a pose, the policy closes the loop itself |
 | 5 | `bow_frog_motor` (torque motor on `bow_frog_hinge`) | *Delta* on the hinge torque held in `data.ctrl`, scaled by `max_frog_torque_delta` (0.02 N·m/step) and clamped to the motor's ctrlrange of ±1 N·m (`max_frog_torque`). Reset zeroes it, so each episode starts with a passive hinge |
 
 ## Observation Space
@@ -69,7 +69,7 @@ episode in `state.info["dr_params"]` and merged onto the base model by
 | What | How |
 |---|---|
 | Bow weight | One factor for the whole bow assembly (mass and inertia together), on top of the per-body mass jitter applied to the rest of the model |
-| Actuator params | Position-servo gains `kp`/`kv` and the first-order filter time constant that stands in for actuation delay, per actuator. The `kp` factor also scales the frog motor's torque constant (it has no position/velocity term or filter, so the `kv` and delay factors are no-ops there) |
+| Actuator params | Velocity-actuator gain `kv` and the first-order filter time constant that stands in for actuation delay, per actuator. The same gain factor also scales the frog motor's torque constant (it has no filter, so the delay factor is a no-op there) |
 | Erhu placement | Drawn from the pre-solved pose pool (`utils_envs.build_erhu_pose_pool`), then drifted slowly across the episode: a cylinder is drawn around the instrument, one point sampled on each end cap, and the erhu walks toward the pose that best fits its top/bottom centres to them |
 | Bow placement | Start pose comes with the drawn pool entry; the reference stroke it is scored against is resampled continuously by [utils_traj.py](envs/utils_traj.py) |
 | Contact params | `solref` (time constant, damping ratio) and `solimp` (`d0`, `d1`, width) on the bow-hair/string pairs only -- the contact that is the task; every other contact in the scene is a backstop the bow should never reach |

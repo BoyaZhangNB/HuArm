@@ -4,14 +4,14 @@
 
     <default>
         <default class="arm">
-            <!-- Matches the arm servos' ctrlrange, so a commanded
-                 position target is always physically reachable. -->
+            <!-- The position bound that ctrlrange gave under position
+                 control; velocity ctrl no longer bounds it. -->
             <joint damping="0.5" range="-3.14 3.14"/>
             <geom type="capsule"
                 rgba="0.2 0.5 0.8 1"
                 density="1000"
                 size="0.02" contype="0" conaffinity="0"/>
-            <position kp="400" kv="8" ctrlrange="-3.14 3.14"/>
+            <velocity kv="30" ctrlrange="-2 2"/>
         </default>
 
         <default class="bow_hair">
@@ -153,46 +153,40 @@
     </worldbody>
 
     <actuator>
-        <!-- Joint-space position servos with a first-order "filter"
-             activation state: ctrl is a joint angle target (rad), low-pass
-             filtered (time constant dynprm[0], standing in for actuation
-             delay) into act, and the PD law tracks it:
-             force = kp*(act - qpos) - kv*qvel, i.e. gainprm[0] = kp,
-             biasprm[1] = -kp, biasprm[2] = -kv. There is no integral term,
-             so a static load sags the joint by load/kp (j2/j5 hold ~3 mrad
-             against gravity at the start pose).
+        <!-- Joint-space velocity actuators with a first-order "filter"
+             activation state: ctrl is a joint velocity target (rad/s),
+             low-pass filtered (time constant dynprm[0], standing in for
+             actuation delay) into act, and the servo pushes qvel toward it:
+             force = kv*(act - qvel), i.e. gainprm[0] = kv, biasprm[2] = -kv.
+             There is no position term, so a zero command does not hold a
+             pose gravity/contact load sags the joint at load/kv rad/s
+             and the policy has to close the position loop itself.
 
-             kp is per joint, set as high as it goes before the servo
-             saturates into a forcerange bang-bang limit cycle on a full
-             0.05 rad/step sine sweep at utils_dr's stiffest draw (+15% gain,
-             0.6x delay, 0.8x mass): j2/j5 chatter from kp~800. kv is critical
-             damping at each joint's effective inertia at the threaded start
-             pose (0.082, 0.080, 0.045, 0.035, 0.0048 kg*m^2), kv = 2*sqrt(kp*I).
-
-             forcerange: j5 raised 2 -> 3 N*m (gravity alone takes ~1.3 N*m,
-             so 2 N*m saturated tracking under the heavy-mass draw) and j4
-             1 -> 2 N*m (it carries the reaction of the 1 N*m bow_frog_motor
-             and had no headroom left to hold its pose). -->
-        <general joint="joint1" ctrllimited="true" ctrlrange="-3.14 3.14" forcerange="-8 8"
+             kv is per joint, set as high as it goes before the servo
+             saturates into a forcerange bang-bang limit cycle (coupled
+             through the torque-driven bow_frog_hinge) on a 1-2 rad/s step, with
+             margin for utils_dr's +15% gain randomization: joint2/5/4
+             chatter from kv~50, joint1/3 are clean past 80. -->
+        <general joint="joint1" ctrllimited="true" ctrlrange="-2 2" forcerange="-8 8"
                  dyntype="filter" dynprm="0.05 0 0"
-                 gaintype="fixed" gainprm="600 0 0"
-                 biastype="affine" biasprm="0 -600 -14"/>
-        <general joint="joint2" ctrllimited="true" ctrlrange="-3.14 3.14" forcerange="-4 4"
+                 gaintype="fixed" gainprm="80 0 0"
+                 biastype="affine" biasprm="0 0 -80"/>
+        <general joint="joint2" ctrllimited="true" ctrlrange="-2 2" forcerange="-4 4"
                  dyntype="filter" dynprm="0.05 0 0"
-                 gaintype="fixed" gainprm="600 0 0"
-                 biastype="affine" biasprm="0 -600 -14"/>
-        <general joint="joint5" ctrllimited="true" ctrlrange="-3.14 3.14" forcerange="-3 3"
+                 gaintype="fixed" gainprm="30 0 0"
+                 biastype="affine" biasprm="0 0 -30"/>
+        <general joint="joint5" ctrllimited="true" ctrlrange="-2 2" forcerange="-2 2"
                  dyntype="filter" dynprm="0.03 0 0"
-                 gaintype="fixed" gainprm="400 0 0"
-                 biastype="affine" biasprm="0 -400 -8.5"/>
-        <general joint="joint3" ctrllimited="true" ctrlrange="-3.14 3.14" forcerange="-3 3"
+                 gaintype="fixed" gainprm="30 0 0"
+                 biastype="affine" biasprm="0 0 -30"/>
+        <general joint="joint3" ctrllimited="true" ctrlrange="-2 2" forcerange="-3 3"
                  dyntype="filter" dynprm="0.04 0 0"
-                 gaintype="fixed" gainprm="400 0 0"
-                 biastype="affine" biasprm="0 -400 -7.5"/>
-        <general joint="joint4" ctrllimited="true" ctrlrange="-3.14 3.14" forcerange="-2 2"
+                 gaintype="fixed" gainprm="80 0 0"
+                 biastype="affine" biasprm="0 0 -80"/>
+        <general joint="joint4" ctrllimited="true" ctrlrange="-2 2" forcerange="-1 1"
                  dyntype="filter" dynprm="0.03 0 0"
-                 gaintype="fixed" gainprm="200 0 0"
-                 biastype="affine" biasprm="0 -200 -2"/>
+                 gaintype="fixed" gainprm="30 0 0"
+                 biastype="affine" biasprm="0 0 -30"/>
 
         <!-- Direct torque motor on bow_frog_hinge: ctrl is the hinge torque
              in N*m, clamped to +-1. Declared last so it is ctrl[-1] /

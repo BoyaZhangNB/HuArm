@@ -9,9 +9,15 @@ from mujoco import mjx
 import jax
 import jax.numpy as jp
 from envs.erhu_env import ErhuEnv
+from envs.utils_envs import joint_to_actuator_id
 
 from utils import print_jp_dict, MetricsLogger
 from agents.obs_normalizer import init_running_norm, update_running_norm, normalize_obs
+
+# Arm joints whose IK is solved so that the bow_frog end-effector reaches the
+# single 3D position teleop sends -- teleop only ever specifies where the
+# end effector should be, not individual joint angles.
+ARM_JOINT_NAMES = ("joint1", "joint2", "joint5", "joint3", "joint4")
 
 # --- TEMPORARY: lets you trigger env.reset() by pressing Enter in the
 # terminal while the viewer loop is running. Remove once no longer needed.
@@ -27,18 +33,16 @@ def _listen_for_reset_key(reset_event):
 def main(xml_path):
     print(f"Using MuJoCo Version: {mujoco.__version__}")
 
-    env = ErhuEnv(episode_time_limit=1000, max_ctrl_delta=0.05, f_safe=3, f_max=30, dr_pool_size=128, dr_pool_seed=420)
+    env = ErhuEnv(episode_time_limit=1000, max_joint_vel=1.25, f_safe=3, f_max=30, dr_pool_size=128, dr_pool_seed=420)
     state = env.reset(jax.random.PRNGKey(0))
     print(f"Environment reset.")
     model = env.mj_model
     data = mjx.get_data(model, state.pipeline_state)
 
-    # Per-actuator scale of a normalized action (action[i] drives ctrl[i]):
-    # arm servo target delta (rad), then the bow_frog_hinge torque delta (N*m).
-    # Slider edits made in the viewer's own Control panel (which write
-    # straight into data.ctrl) are translated into these delta actions.
-    delta_scale = np.full(env.action_size, env.max_ctrl_delta)
-    delta_scale[env._frog_aid] = env.max_frog_torque_delta
+    # Map each arm joint to the actuator that drives it, so slider edits made
+    # in the viewer's own Control panel (which write straight into
+    # data.ctrl, in rad/s) can be translated into normalized velocity actions.
+    arm_actuator_ids = [joint_to_actuator_id(model, jn) for jn in ARM_JOINT_NAMES]
 
     log_print_interval = 0.5
     next_tension_print = 0
@@ -51,10 +55,9 @@ def main(xml_path):
     # Fill the same MjData object the viewer was launched with, rather than
     # rebinding `data` to a new object mujoco.viewer never sees.
     mjx.get_data_into(data, model, state.pipeline_state)
-    # The Control-panel targets (servo angles in rad, frog torque in N*m),
-    # and the ctrl the env last wrote back into data.ctrl -- see the main loop.
-    ctrl_target = data.ctrl.copy()
-    last_ctrl = data.ctrl.copy()
+    # bow_frog_hinge motor torque (N*m): the Control-panel target, and the
+    # value the env last wrote back into data.ctrl -- see the main loop.
+    frog_target = last_frog_ctrl = 0.0
 
     # TEMPORARY: background thread that sets reset_event whenever Enter is
     # pressed in the terminal, so the main loop below can reset the env.
@@ -66,8 +69,9 @@ def main(xml_path):
     with mujoco.viewer.launch_passive(model, data) as viewer:
         viewer.sync()
         print("Teleoperation loop running. Press ESC in viewer to exit.")
-        print("Drag the actuator sliders in the viewer's Control panel to command joint angles")
+        print("Drag the actuator sliders in the viewer's Control panel to command joint velocities")
         print("(the last slider, bow_frog_motor, is a frog hinge torque target in N*m).")
+        print("(a slider left off zero keeps the joint moving; 'Clear all' stops the arm).")
         start = time.time()
         try:
             while viewer.is_running():
@@ -77,8 +81,7 @@ def main(xml_path):
                     state = env.reset(jax.random.PRNGKey(20 + reset_key_counter[0]))
                     state = _step(state, jp.zeros(env.action_size))
                     mjx.get_data_into(data, model, state.pipeline_state)
-                    ctrl_target = data.ctrl.copy()
-                    last_ctrl = data.ctrl.copy()
+                    frog_target = last_frog_ctrl = 0.0
                     viewer.sync()
                     start = time.time()
                     print("\nEnvironment reset (manual).")
@@ -92,20 +95,29 @@ def main(xml_path):
 
                 # The viewer writes any Control-panel slider drags directly into
                 # data.ctrl on its own thread, so grab a consistent snapshot
-                # under the viewer's lock.
+                # under the viewer's lock -- it's the user's joint velocity
+                # command (rad/s), held until the slider moves again.
                 with viewer.lock():
-                    slider_ctrl = data.ctrl.copy()
+                    target_ctrl = data.ctrl.copy()
 
-                # Every action dim is a rate-limited *delta* on the ctrl the
-                # env holds (see ErhuEnv's docstring), so each slider is
-                # treated as a target to ramp toward. The rate limit means
-                # the env writes back an intermediate ctrl each step
-                # (get_data_into below), which would otherwise overwrite the
-                # slider -- so only take a new target from a slider that
-                # moved off what the env last wrote.
-                moved = slider_ctrl != last_ctrl
-                ctrl_target[moved] = slider_ctrl[moved]
-                action = np.clip((ctrl_target - last_ctrl) / delta_scale, -1.0, 1.0).astype(np.float32)
+                # action[-1] is a *delta* on the bow_frog_hinge motor torque
+                # (see ErhuEnv's action[5] docstring), so its Control-panel
+                # slider (N*m) is treated as a target to ramp toward. The
+                # rate limit means the env writes back an intermediate
+                # ctrl each step (get_data_into below), which would
+                # otherwise overwrite the slider -- so only take a new
+                # target when the slider moved off what the env last wrote.
+                frog_aid = env._frog_aid
+                if target_ctrl[frog_aid] != last_frog_ctrl:
+                    frog_target = float(target_ctrl[frog_aid])
+                action = np.zeros(env.action_size, dtype=np.float32)
+                action[frog_aid] = np.clip(
+                    (frog_target - last_frog_ctrl) / env.max_frog_torque_delta, -1.0, 1.0
+                )
+                for aid in arm_actuator_ids:
+                    if aid < 0:
+                        continue
+                    action[aid] = np.clip(target_ctrl[aid] / env.max_joint_vel, -1.0, 1.0)
 
                 state = _step(state, jp.asarray(action))
 
@@ -121,7 +133,7 @@ def main(xml_path):
                     metrics_logger.close()
                     exit(0)
                 mjx.get_data_into(data, model, state.pipeline_state)
-                last_ctrl = data.ctrl.copy()
+                last_frog_ctrl = float(data.ctrl[env._frog_aid])
 
                 viewer.sync()
 

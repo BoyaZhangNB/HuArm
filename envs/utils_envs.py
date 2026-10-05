@@ -11,7 +11,7 @@ import numpy as np
 
 # Listed in actuator order (joint5 sits between joint2 and joint3 in the
 # kinematic chain, and its actuator is declared there too), with the
-# torque-driven frog hinge (a <motor>, not a position servo) last.
+# torque-driven frog hinge (a <motor>, not a velocity servo) last.
 ARM_JOINT_NAMES = ("joint1", "joint2", "joint5", "joint3", "joint4", "bow_frog_hinge")
 
 # Geoms that define the threading problem (see `solve_bow_insertion`).
@@ -58,32 +58,20 @@ def between_strings_target(model, data):
 
 def set_joint_ctrl(model, data, joint_names):
     """
-    Sets the position servos of selected joints to hold the current qpos,
-    and zeroes any other actuator on them (the bow_frog_hinge torque motor),
-    so the arm starts at rest in the pose it was just placed in.
+    Zeroes the velocity command for selected joints' actuators, so the arm
+    starts at rest in the pose it was just placed in.
 
-    The arm's servos are `dyntype="filter"`, so what the PD law actually
-    tracks is the activation state, not ctrl -- and that state starts at zero.
-    Setting ctrl alone would leave every servo pulling towards qpos = 0 for
-    the ~50 ms the filter takes to catch up, which is more than enough to drag
-    the bow out of the strings, so the activation is seeded to match.
+    The arm's velocity actuators are `dyntype="filter"`, so what the servo
+    actually tracks is the activation state, not ctrl -- zeroed as well, so
+    no stale velocity target left over in `data` bleeds into the new pose.
     """
     for jn in joint_names:
-        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn)
         aid = joint_to_actuator_id(model, jn)
         if aid >= 0:
-            data.ctrl[aid] = (data.qpos[model.jnt_qposadr[jid]]
-                              if _is_position_servo(model, aid) else 0.0)
+            data.ctrl[aid] = 0.0
             act_adr = model.actuator_actadr[aid]
             if act_adr >= 0:
-                data.act[act_adr] = data.ctrl[aid]
-
-
-def _is_position_servo(model, aid):
-    """True for an actuator with a position term in its bias (the arm's
-    servos, biasprm[1] = -kp), as opposed to a plain torque motor."""
-    return (model.actuator_biastype[aid] == mujoco.mjtBias.mjBIAS_AFFINE
-            and model.actuator_biasprm[aid][1] != 0)
+                data.act[act_adr] = 0.0
 
 
 def joint_to_actuator_id(model, joint_name):
@@ -527,8 +515,8 @@ def _joint_addressing(model, joint_names):
     shove the arm right out of the solved pose. The box is therefore each
     joint's own range (unbounded for unlimited joints).
 
-    (The arm servos' ctrlrange is the same [-3.14, 3.14], so the joint range
-    is also exactly what `set_joint_ctrl` can command.)
+    (Under position control this also intersected each joint's actuator
+    ctrlrange; with velocity actuators ctrlrange is in rad/s, not a pose.)
     """
     jids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn) for jn in joint_names]
     qpos_idxs = np.array([model.jnt_qposadr[jid] for jid in jids])
@@ -708,8 +696,8 @@ def insert_hair_between_strings(model, data, arm_joint_names=ARM_JOINT_NAMES,
                                 joint_noise_std=0.0, rng=None, verbose=True,
                                 **solver_kwargs):
     """
-    Places the bow so its hair is threaded between the erhu strings, and bakes
-    the resulting pose into the servo targets so the arm holds it.
+    Places the bow so its hair is threaded between the erhu strings, and
+    zeroes the arm's velocity commands so it starts there at rest.
 
     See `solve_bow_insertion` for the solve itself and `bow_insertion_status`
     for what "threaded" is checked to mean. `joint_noise_std` (rad) jitters
@@ -742,48 +730,37 @@ def arm_joint_indices(mj_model, arm_joint_names=ARM_JOINT_NAMES):
     """
     Precomputes, once per model (e.g. at env init), the static index arrays
     needed by `utils_dr.domain_randomize` / `set_joint_ctrl_jax` each reset --
-    qpos addresses for all arm joints, plus the (actuator id, qpos address)
-    pairs for the subset of those joints driven by a position servo, and the
-    ids of the rest (the bow_frog_hinge torque motor). Passing these in as
-    args avoids repeating `mj_name2id`/`joint_to_actuator_id` python lookups
-    on every call.
+    qpos addresses for all arm joints, plus the actuator ids and activation
+    addresses of the subset of those joints that are actuated. Passing these
+    in as args avoids repeating `mj_name2id`/`joint_to_actuator_id` python
+    lookups on every call.
     """
     jids = [mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_JOINT, jn) for jn in arm_joint_names]
     qpos_idxs = jnp.asarray([mj_model.jnt_qposadr[jid] for jid in jids])
 
     aids = [joint_to_actuator_id(mj_model, jn) for jn in arm_joint_names]
-    servo = [(a, mj_model.jnt_qposadr[jid]) for jid, a in zip(jids, aids)
-             if a >= 0 and _is_position_servo(mj_model, a)]
-    servo_aids = jnp.asarray([a for a, _ in servo], dtype=jnp.int32)
-    servo_qpos_idxs = jnp.asarray([q for _, q in servo], dtype=jnp.int32)
-    # Activation addresses of those servos (the arm's are dyntype="filter"),
-    # so a reset can seed them -- see `set_joint_ctrl` for why leaving them
-    # at zero pulls the arm off the pose it was just placed in.
-    act_pairs = [(mj_model.actuator_actadr[a], q) for a, q in servo
-                 if mj_model.actuator_actadr[a] >= 0]
-    act_idxs = (jnp.asarray([p[0] for p in act_pairs], dtype=jnp.int32),
-                jnp.asarray([p[1] for p in act_pairs], dtype=jnp.int32))
-    other_aids = jnp.asarray(
-        [a for a in aids if a >= 0 and not _is_position_servo(mj_model, a)], dtype=jnp.int32)
-    return qpos_idxs, (servo_aids, servo_qpos_idxs), act_idxs, other_aids
+    ctrl_aids = jnp.asarray([a for a in aids if a >= 0], dtype=jnp.int32)
+    # Activation addresses for the subset of those actuators that have an
+    # activation state (the arm's are dyntype="filter"), so a reset can zero
+    # it -- see `set_joint_ctrl`.
+    act_idxs = jnp.asarray(
+        [mj_model.actuator_actadr[a] for a in aids
+         if a >= 0 and mj_model.actuator_actadr[a] >= 0],
+        dtype=jnp.int32,
+    )
+    return qpos_idxs, ctrl_aids, act_idxs
 
 
-def set_joint_ctrl_jax(mjx_data, servo_idxs, act_idxs=None, other_aids=None):
+def set_joint_ctrl_jax(mjx_data, ctrl_aids, act_idxs=None):
     """
-    JAX/MJX counterpart of set_joint_ctrl: sets the position servos' targets
-    -- and, for filtered servos, their activation state -- to the current
-    qpos, and zeroes the other (torque) actuators, given their precomputed
-    index arrays (see `arm_joint_indices`).
+    JAX/MJX counterpart of set_joint_ctrl: zeroes the velocity command -- and,
+    for filtered actuators, their activation state -- of selected joints'
+    actuators, given their precomputed index arrays (see
+    `arm_joint_indices`).
     """
-    servo_aids, servo_qpos_idxs = servo_idxs
-    ctrl = mjx_data.ctrl.at[servo_aids].set(mjx_data.qpos[servo_qpos_idxs])
-    if other_aids is not None:
-        ctrl = ctrl.at[other_aids].set(0.0)
-    mjx_data = mjx_data.replace(ctrl=ctrl)
+    mjx_data = mjx_data.replace(ctrl=mjx_data.ctrl.at[ctrl_aids].set(0.0))
     if act_idxs is not None:
-        idxs, qpos_idxs = act_idxs
-        mjx_data = mjx_data.replace(
-            act=mjx_data.act.at[idxs].set(mjx_data.qpos[qpos_idxs]))
+        mjx_data = mjx_data.replace(act=mjx_data.act.at[act_idxs].set(0.0))
     return mjx_data
 
 # ==================================================
