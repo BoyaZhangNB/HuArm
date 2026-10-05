@@ -27,7 +27,7 @@ def _listen_for_reset_key(reset_event):
 def main(xml_path):
     print(f"Using MuJoCo Version: {mujoco.__version__}")
 
-    env = ErhuEnv(episode_time_limit=1000, max_ctrl_delta=0.05, f_safe=3, f_max=30, dr_pool_size=128, dr_pool_seed=420)
+    env = ErhuEnv(episode_time_limit=1000, max_joint_vel=1.25, f_safe=3, f_max=30, dr_pool_size=128, dr_pool_seed=420)
     state = env.reset(jax.random.PRNGKey(0))
     print(f"Environment reset.")
     model = env.mj_model

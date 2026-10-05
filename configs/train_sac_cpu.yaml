@@ -17,6 +17,9 @@ env:
   #   dr_config: {bow_mass_range: [0.5, 1.5]}
   #   obs_noise_scale: 0.0                   # no observation noise
   #   obs_noise: {force: [{kind: white, scale: 0.1}]}
+  # Velocity commands integrated into position-servo setpoints -- see ErhuEnv.
+  max_joint_vel: 1.25      # rad/s at |action| = 1
+  max_setpoint_lead: 0.15  # rad, anti-windup clamp on |setpoint - qpos|
 
 agent:
   actor_lr: 3.0e-4
@@ -38,5 +41,5 @@ train:
   eval_interval: 20
   eval_episodes: 16
   live_plot: false
-  metrics_path: metrics_sac_vel_ctrl_traj_pos.png
-  checkpoint_path: checkpoints/sac_model_vel_ctrl_traj_pos
+  metrics_path: metrics_sac_vel_on_pos_ctrl_traj.png
+  checkpoint_path: checkpoints/sac_model_vel_on_pos_ctrl_traj

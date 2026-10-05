@@ -108,13 +108,24 @@ DEFAULT_OBS_NOISE = {
 class ErhuEnv(MjxEnv):
     """Erhu bowing task for the HuArm robot. n_frames is frame_skip.
 
-    Action space: joint-space position control. action[:5] in [-1, 1]^5 is a
-    normalized *delta* on the 5 arm position servos' targets (joint1,
-    joint2, joint5, joint3, joint4 -- actuator order), scaled by
-    `max_ctrl_delta` (rad) and added to the target already held in
-    `data.ctrl`, so a zero action holds the current target.
+    Action space: joint-space velocity control on position-only motors.
+    action[:5] in [-1, 1]^5 is a normalized joint velocity command for the
+    5 arm joints (joint1, joint2, joint5, joint3, joint4 -- actuator order),
+    scaled by `max_joint_vel` (rad/s) -- an absolute command, not a delta,
+    as under the old velocity actuators. The motors (see arm.xml) only
+    accept position targets, though, so the velocity is integrated into a
+    desired position held in `data.ctrl[:5]` -- the servo targets -- at the
+    physics rate (every substep, not once per control step), the way a
+    motor driver streams setpoints in a "velocity mode" emulated on top of
+    position control. A zero command therefore holds the current setpoint.
 
-    ctrl is clamped to `mjx_model.actuator_ctrlrange` each step.
+    The setpoint is clamped to `actuator_ctrlrange` and, as anti-windup, to
+    within `max_setpoint_lead` (rad) of the measured joint angle: if a joint
+    is blocked (string, gravity, force saturation), the setpoint stops
+    running away from it instead of piling up an error that would be
+    released as a jerk once the load lets go. That lead (setpoint - qpos)
+    is part of the observation (see `_get_obs`), as the setpoint is hidden
+    state the velocity command integrates.
 
     action[5] drives the 6th actuator, a direct torque `<motor>` on the
     bow_frog_hinge (see arm.xml), standing in for a motor at the bow frog.
@@ -135,7 +146,11 @@ class ErhuEnv(MjxEnv):
         n_frames: int = 20, # timestep 0.002 * 20 = 0.04s per step, 25Hz
         n_stack: int = 3,
         enable_forbidden_zone: bool = True,
-        max_ctrl_delta: float = 0.05, # rad, max per-step change in each arm servo target -- 1.25 rad/s at 25Hz.
+        max_joint_vel: float = 1.25, # rad/s at |action| = 1, integrated into the servo setpoints every substep
+                                     # -- the old position-delta setup's 0.05 rad per 0.04 s step.
+        max_setpoint_lead: float = 0.15, # rad, anti-windup clamp on |setpoint - qpos| per arm joint. Must exceed
+                                          # the steady-state lag at full speed (filter delay ~0.05 s + PD lag, so
+                                          # ~0.1 rad at 1.25 rad/s) or it caps the reachable joint speed.
         episode_time_limit: float = 100.0,
         f_max: float = 10.0,
         f_safe: float = 3.0,
@@ -156,7 +171,7 @@ class ErhuEnv(MjxEnv):
         traj_period_min: float = 4.0, # s, lower bound on the sampled sine-wave period -- see utils_traj_simple.
         traj_period_max: float = 6.0, # s, upper bound on the sampled sine-wave period.
         max_frog_torque_delta: float = 0.02, # N*m, max per-step change in the bow_frog_hinge motor torque --
-                                              # action[5]'s analogue of `max_ctrl_delta`. At the default, a full
+                                              # action[5]'s analogue of `max_joint_vel`. At the default, a full
                                               # -1 -> +1 N*m sweep takes 100 steps (4s at 25Hz).
         reward_weights: Dict[str, float] = None,
         dr_pool_size: int = 1024,
@@ -184,7 +199,8 @@ class ErhuEnv(MjxEnv):
 
         self.n_stack = n_stack
         self.enable_forbidden_zone = enable_forbidden_zone
-        self.max_ctrl_delta = max_ctrl_delta
+        self.max_joint_vel = max_joint_vel
+        self.max_setpoint_lead = max_setpoint_lead
         self.episode_time_limit = episode_time_limit
         self.f_max = f_max
         self.f_safe = f_safe
@@ -296,6 +312,13 @@ class ErhuEnv(MjxEnv):
             f"bow_frog_hinge motor must be the last actuator, got id {self._frog_aid} of nu={m.nu}"
         )
         self.max_frog_torque = float(m.actuator_ctrlrange[self._frog_aid, 1])
+        # qpos addresses of the arm servos' joints, in actuator order, so
+        # ctrl[:5] (the setpoints) lines up with qpos[_servo_qpos_idxs] for
+        # the anti-windup clamp and the setpoint-lead observation.
+        servo_aids, self._servo_qpos_idxs = self._arm_idxs[1]
+        assert list(servo_aids) == list(range(self._frog_aid)), (
+            f"arm servos must be actuators 0..{self._frog_aid - 1}, got {list(servo_aids)}"
+        )
 
         # The erhu's local left/right axis, expressed in the erhu root frame.
         self._lateral_axis_local = jp.array([1.0, 0.0, 0.0])
@@ -314,6 +337,13 @@ class ErhuEnv(MjxEnv):
             specs={**DEFAULT_OBS_NOISE, **(obs_noise or {})},
             scale=obs_noise_scale,
         )
+
+    @property
+    def max_ctrl_delta(self) -> float:
+        """Setpoint travel (rad) per control step at |action| = 1, so callers
+        that map a target setpoint onto an action (teleop.py, test_env.py)
+        can keep dividing a setpoint delta by it."""
+        return self.max_joint_vel * self.dt
 
     # ------------------------------------------------------------------
     def effective_model(
@@ -543,6 +573,10 @@ class ErhuEnv(MjxEnv):
             # it's a commanded state the controller knows, like
             # action_history.
             jp.reshape(data.ctrl[self._frog_aid], (1,)),
+            # Arm servo setpoints relative to the joints (rad) -- the hidden
+            # position state the velocity command integrates, see the class
+            # docstring. Exact for the same reason as the torque above.
+            data.ctrl[:self._frog_aid] - data.qpos[self._servo_qpos_idxs],
             info["action_history"].reshape(-1),
             info["force_history"].reshape(-1),
         ])
@@ -717,6 +751,26 @@ class ErhuEnv(MjxEnv):
         time_up = data.time > self.episode_time_limit
         return force_exceeded | entered_forbidden | time_up
 
+    def _velocity_pipeline_step(
+        self, data: mjx.Data, joint_vel: jax.Array, frog_torque: jax.Array, model: mjx.Model,
+    ) -> mjx.Data:
+        """`pipeline_step`, but integrating `joint_vel` into the arm servo
+        setpoints (ctrl[:5]) every substep instead of holding one ctrl for
+        all n_frames -- see the class docstring for the anti-windup clamp."""
+        h = model.opt.timestep
+        lo, hi = self._ctrl_lo[:self._frog_aid], self._ctrl_hi[:self._frog_aid]
+
+        def substep(d, _):
+            q = d.qpos[self._servo_qpos_idxs]
+            setpoint = d.ctrl[:self._frog_aid] + joint_vel * h
+            setpoint = jp.clip(setpoint, q - self.max_setpoint_lead, q + self.max_setpoint_lead)
+            setpoint = jp.clip(setpoint, lo, hi)
+            d = d.replace(ctrl=jp.concatenate([setpoint, frog_torque]))
+            return mjx.step(model, d), None
+
+        data, _ = jax.lax.scan(substep, data, None, length=self.n_frames)
+        return data
+
     def step(self, state: State, action: jax.Array) -> State:
         action = jp.clip(action, -1.0, 1.0)
         prev_data = state.pipeline_state
@@ -729,19 +783,16 @@ class ErhuEnv(MjxEnv):
             state.info["dr_params"], state.info["erhu_drift"], prev_data.time
         )
 
-        # action[:5]: a delta on the arm servo targets already held in ctrl
-        # (rad). action[5]: a delta on the bow_frog_hinge motor torque
-        # already held in ctrl (N*m) -- see the class docstring. Both land in
-        # ctrl, clamped to the actuators' ctrlrange (which bounds the targets
-        # to the joint range and the torque to +-max_frog_torque).
-        delta_scale = jp.concatenate([
-            jp.full((self._frog_aid,), self.max_ctrl_delta),
-            jp.asarray([self.max_frog_torque_delta]),
-        ])
-        ctrl = prev_data.ctrl + action * delta_scale
-        ctrl = jp.clip(ctrl, self._ctrl_lo, self._ctrl_hi)
-
-        data = self.pipeline_step(prev_data, ctrl, model=model)
+        # action[:5]: joint velocity command (rad/s), integrated into the
+        # arm servo setpoints in ctrl every substep. action[5]: a delta on
+        # the bow_frog_hinge motor torque already held in ctrl (N*m), applied
+        # once per control step -- see the class docstring.
+        joint_vel = action[:-1] * self.max_joint_vel
+        frog_torque = jp.clip(
+            prev_data.ctrl[self._frog_aid:] + action[-1:] * self.max_frog_torque_delta,
+            self._ctrl_lo[self._frog_aid:], self._ctrl_hi[self._frog_aid:],
+        )
+        data = self._velocity_pipeline_step(prev_data, joint_vel, frog_torque, model)
 
         info: Dict[str, Any] = state.info.copy()
         k = self._step_kinematics(data, info, model)
