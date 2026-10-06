@@ -120,8 +120,6 @@ Domain randomization performance
 
 **Next Week**: Fix the observation scale, termination behaviour and IK initialization
 
-<!-- TODO images: live reward-term plot (Assets/HuArm_Live_Reward.png), first PPO logging (Assets/ppo_huarm.png), first SAC run (Assets/metrics_sac.png) in Obsidian vault; upload and replace -->
-
 ## Week 4 - Normalization, IK Reachability, a 5th Joint, iPhone Teleoperation (August 9-15 2026)
 **Goals**: Get episodes to last more than a few steps, stabilize bow-string contact, build a teleoperation pipeline for demonstrations
 
@@ -212,10 +210,6 @@ Trajectory design
 
 **Next Week**: Finish domain randomization, train with the simple sine trajectory, and see whether that fixes pressure tracking
 
-<img src="assets/test_bc_rlpd/metrics_sac_bc_rlpd.png" width="450">
-<img src="assets/test_bc_rlpd/metrics_sac_rlpd.png" width="450">
-<img src="bc/bc_sac_metrics.png" width="400">
-
 ## Week 6 - Full Domain Randomization, Audio Synthesis, Adjustable Frog Friction (August 23-29 2026)
 **Goals**: Complete domain randomization and observation noise, make the sim audible, give the policy a way to apply pressure
 
@@ -249,9 +243,6 @@ Results
 
 **Next Week**: Adjust erhu placement and termination parameters
 
-<img src="assets/metrics_sac_compliant.png" width="450">
-<img src="assets/metrics_sac_dr.png" width="450">
-
 ## Week 7 - Erhu Placement & Termination Experiments (August 30-September 5 2026)
 **Goals**: Find out why the policy is so conservative near the sound box
 
@@ -276,8 +267,6 @@ Termination as an escape hatch
 
 **Next Week**: Simplify the trajectory to isolate the problem
 
-<img src="assets/test_term_param/metrics_sac_fmax30.png" width="400">
-<img src="assets/test_term_param/metrics_sac_low_term.png" width="400">
 <!-- TODO image: misplaced bow with higher erhu (Huarm-wrong-init.png in Obsidian vault); upload and replace -->
 
 ## Weeks 8, 9 - Simple Trajectory Baseline (September 6-19 2026)
@@ -296,8 +285,6 @@ Termination as an escape hatch
 - Modern robot learning roughly follows imitation pre-training followed by RL post-training
 - Reflection: pure RL episodes ended after ~3 steps because bow-string contact is so sensitive. Instead of continuing to tune the environment, I let go of doing pure RL, built teleoperation, and used demonstrations to warm-start learning. **Seemingly suboptimal solutions can beat picture-perfect methods that fail in practice**
 - Status at this point: episodes run to the full 512-step limit and the policy reaches **~78% velocity-tracking accuracy** in evaluation. Pressure tracking is still the weak point
-
-<img src="https://raw.githubusercontent.com/BoyaZhangNB/HuArm/98be4a3b72cde690d1d23de1427d48d80e7c6f2a/metrics_sac_simp_traj.png" width="450">
 
 ## Week 10 - Actuator Physics & Restoring the Markov Property (September 20-26 2026)
 **Goals**: Understand why pressure tracking fails, and check that the MDP assumptions hold
@@ -328,8 +315,6 @@ RLPD (from reading Ball et al. 2023 and the RLinf docs)
 
 **Next Week**: Torque-driven frog joint, proper RLPD sampling
 
-<img src="assets/test_vel_ctrl/metrics_sac_vel_ctrl.png" width="450">
-
 ## Week 11 - Torque-Driven Frog, RLPD Symmetric Sampling (September 27-October 3 2026)
 **Goals**: Replace the friction-based frog with a direct torque actuator, train RLPD on the complex trajectory
 
@@ -350,9 +335,6 @@ RLPD (from reading Ball et al. 2023 and the RLinf docs)
 - RLPD beat pure offline RL
 - Complex trajectory + RLPD gave stable velocity and pressure tracking
 - **Robot geometry and actuation mattered more than the choice of RL method.** All of this week's improvements came after switching the frog to a torque actuator
-
-<img src="assets/test_vel_ctrl/metrics_sac_vel_ctrl_rlpd.png" width="400">
-<img src="assets/test_vel_ctrl/metrics_sac_vel_ctrl_rlpd_traj.png" width="400">
 
 ## Week 12 - Velocity Commands on Position Servos (October 4-5 2026, ongoing)
 **Goals**: Move toward an action space that real hobby/bus servos can execute, and evaluate the policies qualitatively
@@ -376,7 +358,3 @@ Qualitative evaluation of the velocity-controlled policies
 
 Control
 - An admittance controller, f = M·ẍ + K(x − x_v) + K_d·ẋ, treats the end effector as a mass-spring system under an external force: solve for the "intended" acceleration and integrate it into a position target. Reading on learned compliance shows the hard part is deciding *where and when* to be stiff, which depends on contact direction and the scene
-
-<img src="assets/test_vel_ctrl/metrics_sac_vel_ctrl_traj.png" width="400">
-<img src="metrics_sac_pos_ctrl_traj.png" width="400">
-<img src="https://raw.githubusercontent.com/BoyaZhangNB/HuArm/f2c0cdd60fc10ac5c36e08d63c178ba37997977d/metrics_sac_vel_on_pos_ctrl_traj.png" width="400">
