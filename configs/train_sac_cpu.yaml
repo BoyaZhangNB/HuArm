@@ -17,6 +17,7 @@ env:
   #   dr_config: {bow_mass_range: [0.5, 1.5]}
   #   obs_noise_scale: 0.0                   # no observation noise
   #   obs_noise: {force: [{kind: white, scale: 0.1}]}
+  max_ctrl_delta: 0.025
 
 agent:
   actor_lr: 3.0e-4
