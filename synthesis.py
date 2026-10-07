@@ -142,6 +142,26 @@ SPEED_OF_SOUND = 340.0    # m/s, matches pm.speedOfSound
 LOOP_EXTRA_SAMPLES = 12.0
 
 
+# Live pitch keys: the number row plays the major pentatonic scale over two
+# octaves, rooted on the open A string -- 1..9, 0 = A4 B4 C#5 E5 F#5 A5 B5 C#6
+# E6 F#6. Steps are semitones above the root.
+PENTATONIC_STEPS = (0, 2, 4, 7, 9)
+PITCH_KEYS = "1234567890"
+
+
+def major_pentatonic(root_hz: float = A4_HZ, octaves: int = 2) -> list:
+    """Frequencies (Hz) of `octaves` octaves of the major pentatonic scale
+    starting at `root_hz` -- five notes per octave, the top root excluded."""
+    return [root_hz * 2.0 ** ((12 * o + s) / 12.0)
+            for o in range(octaves) for s in PENTATONIC_STEPS]
+
+
+def key_to_freq(key: str, root_hz: float = A4_HZ) -> Optional[float]:
+    """Pitch for a number-row key (see `PITCH_KEYS`), or None for any other."""
+    i = PITCH_KEYS.find(key)
+    return major_pentatonic(root_hz)[i] if len(key) == 1 and i >= 0 else None
+
+
 def freq_to_length(freq_hz: float, loop_extra_samples: float = LOOP_EXTRA_SAMPLES,
                    sample_rate: int = SAMPLE_RATE) -> float:
     """String length (meters) that makes the model sound at `freq_hz`.
@@ -413,9 +433,10 @@ class ErhuSynth:
 
     LABELS = ("length", "velocity", "pressure", "position", "gain", "hair",
               "flutter", "room")
-    # Parameters the real-time path automates. `length` stays a static
-    # parameter: pitch is fixed at A4 for now.
-    AUTOMATED = ("velocity", "pressure", "position", "gain", "hair")
+    # Parameters the real-time path automates. `length` is automated too, so
+    # a pitch change lands on the timeline where it was played instead of
+    # retroactively retuning the whole re-rendered anchor window.
+    AUTOMATED = ("length", "velocity", "pressure", "position", "gain", "hair")
 
     def __init__(self, freq_hz: float = A4_HZ, tone: Optional[ErhuTone] = None,
                  mapping: Optional[BowMapping] = None,
@@ -468,7 +489,7 @@ class ErhuSynth:
 
         # Control state, shared with the render thread.
         self._lock = threading.Lock()
-        self._target = self.mapping(0.0, 0.0, 0.0)
+        self._target = dict(self.mapping(0.0, 0.0, 0.0), length=self._length)
         self._prev = dict(self._target)
 
         self._auto = {k: np.zeros(0, dtype=np.float32) for k in self.AUTOMATED}
@@ -525,8 +546,18 @@ class ErhuSynth:
         """
         controls = self.mapping(force_n, speed_mps, bow_x)
         with self._lock:
-            self._target = controls
+            self._target = dict(controls, length=self._length)
         return controls
+
+    def set_pitch(self, freq_hz: float) -> float:
+        """Retune the string to `freq_hz`; takes effect from the next chunk
+        (with a short glide from `_next_frames`' ramp and `si.smoo`), whether
+        or not the bow is moving. Returns the new string length."""
+        self.freq_hz = float(freq_hz)
+        self._length = freq_to_length(self.freq_hz, self.loop_extra_samples, self.sr)
+        with self._lock:
+            self._target = dict(self._target, length=self._length)
+        return self._length
 
     def update_from_state(self, state, bow_x: float = 0.0) -> dict:
         """`update()` straight off a Brax `State` from `ErhuEnv.step`.
@@ -670,10 +701,11 @@ class ErhuSynth:
         n = int(round(duration_s * CONTROL_RATE))
         t = np.arange(n) / CONTROL_RATE
         auto = {k: np.zeros(n, dtype=np.float32) for k in self.AUTOMATED}
+        auto["length"][:] = self._length
         for i, ti in enumerate(t):
             c = self.mapping(force_fn(ti), speed_fn(ti),
                              bow_x_fn(ti) if bow_x_fn else 0.0)
-            for k in self.AUTOMATED:
+            for k in c:
                 auto[k][i] = c[k]
         self._set_static(length=self._length, flutter=self.tone.pitch_flutter,
                          room=self.tone.room)

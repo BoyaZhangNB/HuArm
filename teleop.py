@@ -398,6 +398,9 @@ class SilentSynth:
     def update_from_state(self, *a, **kw):
         return None
 
+    def set_pitch(self, *a, **kw):
+        return None
+
     def stop(self):
         pass
 

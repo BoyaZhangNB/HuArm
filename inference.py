@@ -48,7 +48,10 @@ Audio: same live erhu synthesis as teleop.py (see synthesis.py) -- the
 policy's bow-hair/string contact force, lateral bow speed and hair position
 drive `ErhuSynth` straight off `state`, so the policy's stroke is heard as
 well as watched. A read-only consumer of `state`; `--no-audio` (or missing
-`dawdreamer`/`sounddevice`/an output device) just runs silently.
+`dawdreamer`/`sounddevice`/an output device) just runs silently. The number
+row at the terminal picks the pitch the string is stopped at: 1..9, 0 play
+two octaves of the major pentatonic scale up from the open A4 string (see
+`synthesis.PITCH_KEYS`); Enter still resets.
 
 Usage:
     python inference.py                                              # ppo, checkpoints/model_latest
@@ -62,6 +65,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import sys
 import threading
 import time
 from pathlib import Path
@@ -91,6 +95,7 @@ from teleop import (
     make_synth,
     patch_desired_velocity_pressure,
 )
+from synthesis import A4_HZ, PITCH_KEYS, key_to_freq
 from utils import MetricsLogger, print_jp_dict
 
 # Same algo -> (agent class, train_state param key) mapping train.py uses.
@@ -303,20 +308,49 @@ def main() -> None:
         begin = input("Press Enter to start the simulation and begin logging metrics...")
 
         # Lets the operator force a reset at any time by pressing Enter at the
-        # terminal, without blocking the sim loop on stdin -- a background
-        # thread just sets a flag the loop polls each iteration.
+        # terminal, and play pitches off the number row, without blocking the
+        # sim loop on stdin -- a background thread sets a flag the loop polls
+        # each iteration and retunes the synth directly (`set_pitch` is
+        # thread-safe). On a tty stdin is put in cbreak mode so a digit acts on
+        # the keypress; otherwise (piped stdin) it is read a line at a time.
         manual_reset_requested = threading.Event()
+        pitch_hz = A4_HZ
+        stdin_tty = sys.stdin.isatty()
+        saved_tty = None
+        if stdin_tty:
+            import termios
+            import tty
+            saved_tty = termios.tcgetattr(sys.stdin)
+            tty.setcbreak(sys.stdin)
 
-        def _listen_for_reset() -> None:
+        def _on_key(ch: str) -> None:
+            nonlocal pitch_hz
+            if ch in ("\n", "\r"):
+                manual_reset_requested.set()
+                return
+            freq = key_to_freq(ch)
+            if freq is not None:
+                pitch_hz = freq
+                synth.set_pitch(freq)
+
+        def _listen_for_keys() -> None:
             while True:
+                if stdin_tty:
+                    ch = sys.stdin.read(1)
+                    if not ch:
+                        break
+                    _on_key(ch)
+                    continue
                 try:
-                    input()
+                    line = input()
                 except EOFError:
                     break
-                manual_reset_requested.set()
+                for ch in line or "\n":
+                    _on_key(ch)
 
-        threading.Thread(target=_listen_for_reset, daemon=True).start()
-        print("Press Enter at any time to reset the simulation.")
+        threading.Thread(target=_listen_for_keys, daemon=True).start()
+        print(f"Press Enter at any time to reset the simulation; "
+              f"{' '.join(PITCH_KEYS)} pick the pitch (A major pentatonic, two octaves).")
 
         def do_reset() -> None:
             nonlocal state, rng, start, next_log, metrics_logger
@@ -342,7 +376,8 @@ def main() -> None:
 
                 elapsed_real = time.time() - start
                 print(f"Sim time {data.time:.3f}, elapsed real time {elapsed_real:.3f}, "
-                      f"cmd v={command_velocity:+.4f} m/s p={command_pressure:.3f} N", end="\r")
+                      f"cmd v={command_velocity:+.4f} m/s p={command_pressure:.3f} N "
+                      f"pitch {pitch_hz:7.2f} Hz", end="\r")
 
                 if data.time >= elapsed_real:
                     time.sleep(0.01)
@@ -411,6 +446,8 @@ def main() -> None:
         except KeyboardInterrupt:
             print("\nKeyboard interrupt received. Exiting.")
         finally:
+            if saved_tty is not None:
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, saved_tty)
             if command_receiver is not None:
                 command_receiver.stop()
             synth.stop()
