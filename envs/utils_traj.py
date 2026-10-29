@@ -13,7 +13,8 @@ position along its own length (see `ErhuEnv._lateral_axis_local` /
 `_bow_geometry`), 0 at the centre, -1/+1 at the frog/tip ends.
 
 Each "segment" runs the bow from its current position x0 to a freshly
-sampled target x, along a randomly-shaped speed/pressure profile:
+sampled target x in [-0.85, 0.85] (`_TARGET_RANGE`), along a
+randomly-shaped speed/pressure profile:
 
     - four points fix each profile: (x0, 0), (x, 0), and two more
       randomly-placed points (x1, y1), (x2, y2) shared between the two
@@ -60,6 +61,10 @@ BOW_HALF_LENGTH = 0.20
 # Minimum guaranteed "creep" speed toward the segment target, as a fraction
 # of `v_limit` -- see `query_traj`.
 _MIN_CREEP_VEL = 0.02
+
+# Segment targets are drawn from [-_TARGET_RANGE, _TARGET_RANGE] rather than
+# the full [-1, 1], keeping strokes clear of the very frog/tip ends.
+_TARGET_RANGE = 0.85
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +201,8 @@ def sample_segment(
     """Samples one new bow-stroke segment starting at position `x0`.
 
     Returns `(target, vcoef, pcoef)`:
-      target -- new normalized target position in [-1, 1]
+      target -- new normalized target position in
+                [-_TARGET_RANGE, _TARGET_RANGE]
       vcoef  -- (5,) ascending-power quartic coefficients for the desired
                 lateral velocity v(x) (m/s), v(x0) = v(target) = 0
       pcoef  -- (5,) ascending-power quartic coefficients for the desired
@@ -204,7 +210,7 @@ def sample_segment(
     """
     k_target, k_x1, k_x2, k_yv1, k_yv2, k_yp1, k_yp2, k_a = jax.random.split(rng, 8)
 
-    target = jax.random.uniform(k_target, (), minval=-1.0, maxval=1.0)
+    target = jax.random.uniform(k_target, (), minval=-_TARGET_RANGE, maxval=_TARGET_RANGE)
 
     # The two extra parametrization points are sampled *within* the
     # travelled segment [x0, target] rather than over the full [-1, 1] --

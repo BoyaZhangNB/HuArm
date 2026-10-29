@@ -232,7 +232,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--metrics-path", default="metrics.png",
-        help="Where to save the reward-terms plot on exit (default: metrics.png).",
+        help="Where to save the reward-terms plot on exit (default: metrics.png). The raw "
+             "logged values are saved alongside it with an .npz suffix.",
     )
     parser.add_argument(
         "--verbose", action="store_true", help="Print the raw action vector every step.",
@@ -465,6 +466,7 @@ def main() -> None:
             synth.stop()
 
         metrics_logger.plot(args.metrics_path)
+        metrics_logger.save(Path(args.metrics_path).with_suffix(".npz"))
         metrics_logger.close()
 
 

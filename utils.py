@@ -228,6 +228,16 @@ class MetricsLogger:
         plt.close(fig)
         print(f"Saved metrics plot to {save_path}")
 
+    def save(self, save_path="metrics.npz"):
+        """Dump the raw logged values to an .npz: "steps" plus one array per
+        metric key (nested keys keep their "/" names, nan where missing)."""
+        if not self.history:
+            print("MetricsLogger: nothing to save (no scalar float metrics logged).")
+            return
+        arrays = {k: np.asarray(v, dtype=np.float64) for k, v in self.history.items()}
+        np.savez(save_path, steps=np.asarray(self.steps, dtype=np.float64), **arrays)
+        print(f"Saved metrics values to {save_path}")
+
     def close(self):
         if self.live_plotter is not None:
             self.live_plotter.close()
