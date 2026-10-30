@@ -1,0 +1,262 @@
+<mujoco model="erhu_arm_v2">
+    <!-- Replica of the ErhuArm v2 Fusion design (Default Project / ErhuArm v2).
+         Body/joint names, actuators, bow and contact pairs are identical to
+         arm.xml, so ErhuEnv(xml_path="huarm/arm_v2.xml") loads it. What changes:
+         - links between servo axes are capped at 130 mm: joint1->joint2 is
+           130 mm (arm.xml 200) and joint3->joint4 is 130 mm (arm.xml 250);
+         - every link is the printed CAD part plus its STS3215 servo, with mass
+           and inertia from the meshes instead of density-1000 capsules;
+         - the base mount is fixed: joint1 moves from the "base" body (which in
+           arm.xml spun a 0.52 kg sphere with it) to "link1";
+         - joint1..5 ranges are the collision-free limits measured on the CAD
+           (joint5 stops at 112 deg, where link4 reaches the base mount at joint2 = 0);
+         - servo forcerange is the 12 V STS3215 stall torque (2.94 N*m);
+         - the J3/J4/frog servos sit 44 mm below the bow plane along their own
+           axes, which changes mass distribution but not the joint axes. -->
+
+    <compiler angle="radian" autolimits="true"/>
+
+    <default>
+        <default class="arm">
+            <!-- Matches the arm servos' ctrlrange, so a commanded
+                 position target is always physically reachable. -->
+            <joint damping="0.5" range="-3.14 3.14"/>
+            <geom type="capsule"
+                rgba="0.2 0.5 0.8 1"
+                density="1000"
+                size="0.02" contype="0" conaffinity="0"/>
+            <position kp="400" kv="8" ctrlrange="-3.14 3.14"/>
+        </default>
+
+        <default class="bow_hair">
+            <geom type="capsule" size="0.0004" rgba="0.95 0.92 0.85 1"
+                  contype="2" conaffinity="1"
+                  friction="1.2 0.02 0.001" solref="0.015 1" solimp="0.9 0.95 0.002" condim="3"/>
+        </default>
+
+        <default class="bow_hair_string_contact">
+            <!-- Bow hair (r=0.4mm) and string (r=0.6mm) are both knife-thin,
+                 so the contact `margin` is effectively the only compliance
+                 zone standing in for the real hair ribbon's give. The old
+                 solimp d0=0.9 made that zone act like a digital switch
+                 force went from 0N to ~8N in well under 1mm of travel, so
+                 ordinary sub-mrad control noise flickered the hair on/off
+                 the string every few steps (jittery contact force, unusable
+                 "touching" flag). d0 near 0 instead ramps stiffness up
+                 gradually across `margin`, turning that same travel into a
+                 smooth spring confirmed to remove the flicker under
+                 injected 0.5mrad actuator noise (34/2000 steps -> 0/2000). -->
+            <pair condim="3"
+                  friction="0.4 0.4 0.02 0.001 0.001"
+                  solref="0.015 4"
+                  solimp="0.02 0.9 0.0035 0.5 2"
+                  margin="0.004"
+                  gap="0.02"/>
+        </default>
+
+        <default class="bow_stick_string_contact">
+            <!-- The wood parts of the bow (frog + both stick ends) should
+                 never actually touch the strings in normal play; this pair
+                 exists purely as an anti-tunneling backstop, not to be
+                 tuned for a smooth "touching" signal like the hair pairs
+                 above. margin=0.004 covers several timesteps of travel at
+                 the bow's ~0.5 m/s working speed (0.001 m/step @ dt=0.002s
+                 in erhu.xml), so the solver always sees the approach before
+                 the knife-thin string geometry could be skipped over
+                 within a single step. -->
+            <pair condim="3"
+                  friction="0.3 0.3 0.005 0.0001 0.0001"
+                  solref="0.01 1"
+                  solimp="0.9 0.95 0.001"
+                  margin="0.004"/>
+        </default>
+
+        <!-- CAD meshes: visual + inertia only. Like the capsules they replace
+             (contype=0), the arm never collides. Part masses are 15 %-infill
+             PLA prints (1.2 mm solid shell), servos 55 g each, inertia from the
+             mesh at uniform density. -->
+        <default class="arm_visual">
+            <geom type="mesh" contype="0" conaffinity="0" group="1"/>
+        </default>
+    </default>
+
+    <asset>
+        <mesh name="base_mount" file="meshes/erhu_arm_v2/base_mount.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+        <mesh name="link1" file="meshes/erhu_arm_v2/link1.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+        <mesh name="link2" file="meshes/erhu_arm_v2/link2.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+        <mesh name="link3" file="meshes/erhu_arm_v2/link3.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+        <mesh name="link4" file="meshes/erhu_arm_v2/link4.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+        <mesh name="link5" file="meshes/erhu_arm_v2/link5.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+        <mesh name="bow_clamp" file="meshes/erhu_arm_v2/bow_clamp.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+        <mesh name="bow_jaw" file="meshes/erhu_arm_v2/bow_jaw.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+        <mesh name="sts3215" file="meshes/erhu_arm_v2/sts3215.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+    </asset>
+
+    <worldbody>
+        <body name="base" pos="0.3 -0.3 1" childclass="arm" euler="0 0 -2.3708">
+            <geom name="base_mount_geom" class="arm_visual" mesh="base_mount" mass="0.0388" pos="0 0 0" rgba="0.82 0.80 0.76 1"/>
+            <geom name="servo_j1_geom" class="arm_visual" mesh="sts3215" mass="0.055" pos="0 0 0.0125" quat="0.5 -0.5 0.5 0.5" rgba="0.12 0.12 0.13 1"/>
+
+            <body name="link1" pos="0 0 0">
+                <joint name="joint1" type="hinge" axis="0 1 0" range="-1.5708 1.5708"/>
+                <geom name="link1_geom" class="arm_visual" mesh="link1" mass="0.0621" pos="0 0 0" rgba="0.82 0.80 0.76 1"/>
+                <geom name="servo_j2_geom" class="arm_visual" mesh="sts3215" mass="0.055" pos="0 0 -0.1175" quat="0.5 -0.5 0.5 0.5" rgba="0.12 0.12 0.13 1"/>
+
+                <body name="joint2_body" pos="0 0 -0.13">
+                    <joint name="joint2" type="hinge" axis="0 1 0" range="-3.1416 0.9599"/>
+                    <geom name="link2_geom" class="arm_visual" mesh="link2" mass="0.0576" pos="0 0 0.13" rgba="0.82 0.80 0.76 1"/>
+                    <geom name="servo_j5_geom" class="arm_visual" mesh="sts3215" mass="0.055" pos="-0.1 0 -0.0125" quat="-0.5 0.5 0.5 0.5" rgba="0.12 0.12 0.13 1"/>
+
+                    <body name="joint5_body" pos="-0.1 0 0">
+                        <joint name="joint5" type="hinge" axis="0 1 0" range="-0.1745 1.9548"/>
+                        <geom name="link3_geom" class="arm_visual" mesh="link3" mass="0.0447" pos="0.1 0 0.13" rgba="0.82 0.80 0.76 1"/>
+                        <geom name="servo_j3_geom" class="arm_visual" mesh="sts3215" mass="0.055" pos="-0.0625 0 -0.044" quat="1 0 0 0" rgba="0.12 0.12 0.13 1"/>
+
+                        <body name="joint3_body" pos="-0.05 0 0">
+                            <joint name="joint3" type="hinge" axis="0 0 1" range="-1.9199 1.9199"/>
+                            <geom name="link4_geom" class="arm_visual" mesh="link4" mass="0.0483" pos="0.15 0 0.13" rgba="0.82 0.80 0.76 1"/>
+                            <geom name="servo_j4_geom" class="arm_visual" mesh="sts3215" mass="0.055" pos="-0.1175 0 -0.044" quat="0 0 0 1" rgba="0.12 0.12 0.13 1"/>
+
+                            <body name="joint4_body" pos="-0.13 0 0">
+                                <joint name="joint4" type="hinge" axis="0 0 1" range="-2.6180 2.6180"/>
+                                <geom name="link5_geom" class="arm_visual" mesh="link5" mass="0.0441" pos="0.28 0 0.13" rgba="0.82 0.80 0.76 1"/>
+                                <geom name="servo_frog_geom" class="arm_visual" mesh="sts3215" mass="0.055" pos="-0.0875 0 -0.044" quat="0 0 0 1" rgba="0.12 0.12 0.13 1"/>
+
+                                <body name="end_effector" pos="-0.1 0 0">
+                                    <body name="bow_frog" pos="0 0 0" euler="-1.5708 3.14 0">
+
+                                        <joint name="bow_frog_hinge"
+                                            type="hinge"
+                                            axis="0 1 0"
+                                            damping="0.05"
+                                            limited="true"
+                                            range="-1.57 1.57"/>
+
+                                        <geom name="bow_clamp_geom" class="arm_visual" mesh="bow_clamp" mass="0.0118" pos="-0.38 -0.13 0.000605686" quat="0.000563087 0.000563089 -0.707105 0.707108" rgba="0.82 0.80 0.76 1"/>
+                                        <geom name="bow_jaw_geom" class="arm_visual" mesh="bow_jaw" mass="0.0089" pos="-0.38 -0.13 0.000605686" quat="0.000563087 0.000563089 -0.707105 0.707108" rgba="0.82 0.80 0.76 1"/>
+
+                                        <geom name="frog_geom" type="capsule" size="0.008 0.02" rgba="0.2 0.5 0.05 1" mass="0.02"/>
+
+                                        <body name="bow_link_0" pos="0.005 0 0.025" zaxis="1 0 1">
+                                            <geom name="bow_geom_0" type="capsule" fromto="0 0 0  0 0 0.02" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.004"/>
+
+                                            <body name="bow_link_1" pos="-0 0 0.02" zaxis="-1 0 1">
+                                                <geom name="bow_geom_1" type="capsule" fromto="0 0 0  0 0 0.41" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.008" contype="2" conaffinity="1"/>
+                                                
+                                                <body name="bow_link_7" pos="0 0 0.41">
+                                                    <geom name="bow_geom_7" type="capsule" fromto="0 0 0  -0.02 0 0.04" size="0.005" rgba="0.4 0.25 0.1 1" mass="0.008"/>
+
+                                                    <body name="bow_tip" pos="-0.02 0 0.04">
+                                                        <geom name="bow_tip_geom" type="capsule" fromto="0 0 0  0 0 0.03" size="0.004" rgba="0.4 0.25 0.1 1" mass="0.004"/>
+                                                        <site name="bow_tip_site" pos="0 0 0.03" size="0.003"/>
+
+                                                        <body name="bow_hair" pos="0 0 0">
+                                                            <geom name="bow_hair_geom" class="bow_hair" fromto="0 0 0  0 0 -0.5" mass="0.002016"/>
+                                                            <site name="bow_hair_frog_site" pos="0 0 0" size="0.0005"/>
+                                                            <site name="bow_hair_tip_site" pos="0 0 -0.5" size="0.0005"/>
+                                                        </body>
+                                                    </body>
+                                                </body>
+                                            </body>
+                                        </body>
+
+                                        <site name="bow_frog_site" pos="0 0 -0.01" size="0.003"/>
+                                    </body>
+
+                                </body>
+
+                            </body>
+
+                        </body>
+
+                    </body>
+
+                </body>
+
+            </body>
+
+        </body>
+
+    </worldbody>
+
+    <actuator>
+        <!-- arm_v2: forcerange of joint1..5 is the 12 V STS3215 stall torque
+             (2.94 N*m) instead of arm.xml's tuned 8/4/3/3/2 N*m. kp is softened
+             to 1/4 of arm.xml's (natural frequency halved) and kv is critical
+             damping at arm_v2's largest effective inertias over the threaded start poses
+             (0.05164, 0.03099, 0.01464, 0.01186, 0.00468 kg*m^2), counting the
+             0.5 N*m*s joint damping: kv = 2*sqrt(kp*I) - 0.5.
+             The comment below describes arm.xml's original tuning; the filter
+             time constants and the frog motor are unchanged. -->
+        <!-- Joint-space position servos with a first-order "filter"
+             activation state: ctrl is a joint angle target (rad), low-pass
+             filtered (time constant dynprm[0], standing in for actuation
+             delay) into act, and the PD law tracks it:
+             force = kp*(act - qpos) - kv*qvel, i.e. gainprm[0] = kp,
+             biasprm[1] = -kp, biasprm[2] = -kv. There is no integral term,
+             so a static load sags the joint by load/kp (j2/j5 hold ~3 mrad
+             against gravity at the start pose).
+
+             kp is per joint, set as high as it goes before the servo
+             saturates into a forcerange bang-bang limit cycle on a full
+             0.05 rad/step sine sweep at utils_dr's stiffest draw (+15% gain,
+             0.6x delay, 0.8x mass): j2/j5 chatter from kp~800. kv is critical
+             damping at each joint's effective inertia at the threaded start
+             pose (0.082, 0.080, 0.045, 0.035, 0.0048 kg*m^2), kv = 2*sqrt(kp*I).
+
+             forcerange: j5 raised 2 -> 3 N*m (gravity alone takes ~1.3 N*m,
+             so 2 N*m saturated tracking under the heavy-mass draw) and j4
+             1 -> 2 N*m (it carries the reaction of the 1 N*m bow_frog_motor
+             and had no headroom left to hold its pose). -->
+        <general joint="joint1" ctrllimited="true" ctrlrange="-3.14 3.14" forcerange="-2.94 2.94"
+                 dyntype="filter" dynprm="0.05 0 0"
+                 gaintype="fixed" gainprm="150 0 0"
+                 biastype="affine" biasprm="0 -150 -5.07"/>
+        <general joint="joint2" ctrllimited="true" ctrlrange="-3.14 3.14" forcerange="-2.94 2.94"
+                 dyntype="filter" dynprm="0.05 0 0"
+                 gaintype="fixed" gainprm="150 0 0"
+                 biastype="affine" biasprm="0 -150 -3.81"/>
+        <general joint="joint5" ctrllimited="true" ctrlrange="-3.14 3.14" forcerange="-2.94 2.94"
+                 dyntype="filter" dynprm="0.03 0 0"
+                 gaintype="fixed" gainprm="100 0 0"
+                 biastype="affine" biasprm="0 -100 -1.92"/>
+        <general joint="joint3" ctrllimited="true" ctrlrange="-3.14 3.14" forcerange="-2.94 2.94"
+                 dyntype="filter" dynprm="0.04 0 0"
+                 gaintype="fixed" gainprm="100 0 0"
+                 biastype="affine" biasprm="0 -100 -1.68"/>
+        <general joint="joint4" ctrllimited="true" ctrlrange="-3.14 3.14" forcerange="-2.94 2.94"
+                 dyntype="filter" dynprm="0.03 0 0"
+                 gaintype="fixed" gainprm="50 0 0"
+                 biastype="affine" biasprm="0 -50 -0.47"/>
+
+        <!-- Direct torque motor on bow_frog_hinge: ctrl is the hinge torque
+             in N*m, clamped to +-1. Declared last so it is ctrl[-1] /
+             action[-1]; ErhuEnv drives it as a per-step delta on the held
+             ctrl (see its action[5] docstring). ctrl = 0 leaves the hinge
+             passive (damping only). -->
+        <motor name="bow_frog_motor" joint="bow_frog_hinge" gear="1"
+               ctrllimited="true" ctrlrange="-1 1"/>
+    </actuator>
+
+    <include file="erhu.xml"/>
+
+    <contact>
+        <pair name="bow_hair_string_D_pair" class="bow_hair_string_contact"
+              geom1="bow_hair_geom" geom2="string_D_geom"/>
+        <pair name="bow_hair_string_A_pair" class="bow_hair_string_contact"
+              geom1="bow_hair_geom" geom2="string_A_geom"/>
+
+        <!-- Anti-tunneling backstop pairs: the wood bow should never cross
+             the strings, only the hair should touch them. -->
+        <pair name="bow_stick0_string_D_pair" class="bow_stick_string_contact"
+              geom1="bow_geom_0" geom2="string_D_geom"/>
+        <pair name="bow_stick0_string_A_pair" class="bow_stick_string_contact"
+              geom1="bow_geom_0" geom2="string_A_geom"/>
+        <pair name="bow_stick7_string_D_pair" class="bow_stick_string_contact"
+              geom1="bow_geom_7" geom2="string_D_geom"/>
+        <pair name="bow_stick7_string_A_pair" class="bow_stick_string_contact"
+              geom1="bow_geom_7" geom2="string_A_geom"/>
+
+    </contact>
+
+</mujoco>
