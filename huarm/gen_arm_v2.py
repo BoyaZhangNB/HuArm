@@ -120,7 +120,7 @@ tail = re.sub(r'(<general joint="joint\d"[^>]*?)forcerange="-?[\d.]+ [\d.]+"',
 # underdamped), counting the 0.5 N*m*s joint damping from the "arm" default:
 # kv + 0.5 = 2*sqrt(kp*I).
 KP = {'joint1': 150, 'joint2': 150, 'joint5': 100, 'joint3': 100, 'joint4': 50}
-I_EFF = {'joint1': 0.05164, 'joint2': 0.03099, 'joint5': 0.01464, 'joint3': 0.01186, 'joint4': 0.00468}
+I_EFF = {'joint1': 0.05359, 'joint2': 0.0319, 'joint5': 0.01501, 'joint3': 0.01202, 'joint4': 0.00469}
 JOINT_DAMPING = 0.5
 KV = {j: round(2 * np.sqrt(KP[j] * I_EFF[j]) - JOINT_DAMPING, 2) for j in KP}
 for j in KP:
@@ -139,7 +139,8 @@ tail = tail.replace('    <actuator>', f'''    <actuator>
 
 assets = '\n'.join(
     f'        <mesh name="{n}" file="meshes/erhu_arm_v2/{n}.stl" scale="0.001 0.001 0.001" inertia="exact"/>'
-    for n in ['base_mount', 'link1', 'link2', 'link3', 'link4', 'link5', 'bow_clamp', 'bow_jaw', 'sts3215'])
+    for n in ['base_mount', 'link1', 'link2', 'link3', 'link4', 'link5', 'bow_clamp', 'bow_jaw', 'sts3215']
+    + [f'link{i}_idler' for i in range(1, 6)] + [f'clips_{j}' for j in ('j1', 'j2', 'j5', 'j3', 'j4', 'jf')])
 
 xml = f'''<mujoco model="erhu_arm_v2">
     <!-- Replica of the ErhuArm v2 Fusion design (Default Project / ErhuArm v2).
@@ -168,31 +169,42 @@ xml = f'''<mujoco model="erhu_arm_v2">
     <worldbody>
         <body name="base" pos="0.3 -0.3 1" childclass="arm" euler="0 0 -2.3708">
             {link_geom('base_mount', 'base')}
+            {link_geom('clips_j1', 'base')}
             {servo_geom('j1', 'base')}
 
             <body name="link1" pos="0 0 0">
                 <joint name="joint1" type="hinge" axis="0 1 0" range="{rng('joint1')}"/>
                 {link_geom('link1', 'link1')}
+                {link_geom('link1_idler', 'link1')}
+                {link_geom('clips_j2', 'link1')}
                 {servo_geom('j2', 'link1')}
 
                 <body name="joint2_body" pos="0 0 {-L12 / 1000:g}">
                     <joint name="joint2" type="hinge" axis="0 1 0" range="{rng('joint2')}"/>
                     {link_geom('link2', 'joint2_body')}
+                    {link_geom('link2_idler', 'joint2_body')}
+                    {link_geom('clips_j5', 'joint2_body')}
                     {servo_geom('j5', 'joint2_body')}
 
                     <body name="joint5_body" pos="-0.1 0 0">
                         <joint name="joint5" type="hinge" axis="0 1 0" range="{rng('joint5')}"/>
                         {link_geom('link3', 'joint5_body')}
+                        {link_geom('link3_idler', 'joint5_body')}
+                        {link_geom('clips_j3', 'joint5_body')}
                         {servo_geom('j3', 'joint5_body')}
 
                         <body name="joint3_body" pos="-0.05 0 0">
                             <joint name="joint3" type="hinge" axis="0 0 1" range="{rng('joint3')}"/>
                             {link_geom('link4', 'joint3_body')}
+                            {link_geom('link4_idler', 'joint3_body')}
+                            {link_geom('clips_j4', 'joint3_body')}
                             {servo_geom('j4', 'joint3_body')}
 
                             <body name="joint4_body" pos="{-L34 / 1000:g} 0 0">
                                 <joint name="joint4" type="hinge" axis="0 0 1" range="{rng('joint4')}"/>
                                 {link_geom('link5', 'joint4_body')}
+                                {link_geom('link5_idler', 'joint4_body')}
+                                {link_geom('clips_jf', 'joint4_body')}
                                 {servo_geom('frog', 'joint4_body')}
 
                                 <body name="end_effector" pos="-0.1 0 0">

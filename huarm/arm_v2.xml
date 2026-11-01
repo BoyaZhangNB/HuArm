@@ -90,36 +90,58 @@
         <mesh name="bow_clamp" file="meshes/erhu_arm_v2/bow_clamp.stl" scale="0.001 0.001 0.001" inertia="exact"/>
         <mesh name="bow_jaw" file="meshes/erhu_arm_v2/bow_jaw.stl" scale="0.001 0.001 0.001" inertia="exact"/>
         <mesh name="sts3215" file="meshes/erhu_arm_v2/sts3215.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+        <mesh name="link1_idler" file="meshes/erhu_arm_v2/link1_idler.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+        <mesh name="link2_idler" file="meshes/erhu_arm_v2/link2_idler.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+        <mesh name="link3_idler" file="meshes/erhu_arm_v2/link3_idler.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+        <mesh name="link4_idler" file="meshes/erhu_arm_v2/link4_idler.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+        <mesh name="link5_idler" file="meshes/erhu_arm_v2/link5_idler.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+        <mesh name="clips_j1" file="meshes/erhu_arm_v2/clips_j1.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+        <mesh name="clips_j2" file="meshes/erhu_arm_v2/clips_j2.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+        <mesh name="clips_j5" file="meshes/erhu_arm_v2/clips_j5.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+        <mesh name="clips_j3" file="meshes/erhu_arm_v2/clips_j3.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+        <mesh name="clips_j4" file="meshes/erhu_arm_v2/clips_j4.stl" scale="0.001 0.001 0.001" inertia="exact"/>
+        <mesh name="clips_jf" file="meshes/erhu_arm_v2/clips_jf.stl" scale="0.001 0.001 0.001" inertia="exact"/>
     </asset>
 
     <worldbody>
         <body name="base" pos="0.3 -0.3 1" childclass="arm" euler="0 0 -2.3708">
-            <geom name="base_mount_geom" class="arm_visual" mesh="base_mount" mass="0.0388" pos="0 0 0" rgba="0.82 0.80 0.76 1"/>
+            <geom name="base_mount_geom" class="arm_visual" mesh="base_mount" mass="0.0392" pos="0 0 0" rgba="0.82 0.80 0.76 1"/>
+            <geom name="clips_j1_geom" class="arm_visual" mesh="clips_j1" mass="0.0004" pos="0 0 0" rgba="0.82 0.80 0.76 1"/>
             <geom name="servo_j1_geom" class="arm_visual" mesh="sts3215" mass="0.055" pos="0 0 0.0125" quat="0.5 -0.5 0.5 0.5" rgba="0.12 0.12 0.13 1"/>
 
             <body name="link1" pos="0 0 0">
                 <joint name="joint1" type="hinge" axis="0 1 0" range="-1.5708 1.5708"/>
-                <geom name="link1_geom" class="arm_visual" mesh="link1" mass="0.0621" pos="0 0 0" rgba="0.82 0.80 0.76 1"/>
+                <geom name="link1_geom" class="arm_visual" mesh="link1" mass="0.0579" pos="0 0 0" rgba="0.82 0.80 0.76 1"/>
+                <geom name="link1_idler_geom" class="arm_visual" mesh="link1_idler" mass="0.0110" pos="0 0 0" rgba="0.82 0.80 0.76 1"/>
+                <geom name="clips_j2_geom" class="arm_visual" mesh="clips_j2" mass="0.0004" pos="0 0 0" rgba="0.82 0.80 0.76 1"/>
                 <geom name="servo_j2_geom" class="arm_visual" mesh="sts3215" mass="0.055" pos="0 0 -0.1175" quat="0.5 -0.5 0.5 0.5" rgba="0.12 0.12 0.13 1"/>
 
                 <body name="joint2_body" pos="0 0 -0.13">
                     <joint name="joint2" type="hinge" axis="0 1 0" range="-3.1416 0.9599"/>
-                    <geom name="link2_geom" class="arm_visual" mesh="link2" mass="0.0576" pos="0 0 0.13" rgba="0.82 0.80 0.76 1"/>
+                    <geom name="link2_geom" class="arm_visual" mesh="link2" mass="0.0533" pos="0 0 0.13" rgba="0.82 0.80 0.76 1"/>
+                    <geom name="link2_idler_geom" class="arm_visual" mesh="link2_idler" mass="0.0112" pos="0 0 0.13" rgba="0.82 0.80 0.76 1"/>
+                    <geom name="clips_j5_geom" class="arm_visual" mesh="clips_j5" mass="0.0004" pos="0 0 0.13" rgba="0.82 0.80 0.76 1"/>
                     <geom name="servo_j5_geom" class="arm_visual" mesh="sts3215" mass="0.055" pos="-0.1 0 -0.0125" quat="-0.5 0.5 0.5 0.5" rgba="0.12 0.12 0.13 1"/>
 
                     <body name="joint5_body" pos="-0.1 0 0">
                         <joint name="joint5" type="hinge" axis="0 1 0" range="-0.1745 1.9548"/>
-                        <geom name="link3_geom" class="arm_visual" mesh="link3" mass="0.0447" pos="0.1 0 0.13" rgba="0.82 0.80 0.76 1"/>
+                        <geom name="link3_geom" class="arm_visual" mesh="link3" mass="0.0395" pos="0.1 0 0.13" rgba="0.82 0.80 0.76 1"/>
+                        <geom name="link3_idler_geom" class="arm_visual" mesh="link3_idler" mass="0.0091" pos="0.1 0 0.13" rgba="0.82 0.80 0.76 1"/>
+                        <geom name="clips_j3_geom" class="arm_visual" mesh="clips_j3" mass="0.0004" pos="0.1 0 0.13" rgba="0.82 0.80 0.76 1"/>
                         <geom name="servo_j3_geom" class="arm_visual" mesh="sts3215" mass="0.055" pos="-0.0625 0 -0.044" quat="1 0 0 0" rgba="0.12 0.12 0.13 1"/>
 
                         <body name="joint3_body" pos="-0.05 0 0">
                             <joint name="joint3" type="hinge" axis="0 0 1" range="-1.9199 1.9199"/>
-                            <geom name="link4_geom" class="arm_visual" mesh="link4" mass="0.0483" pos="0.15 0 0.13" rgba="0.82 0.80 0.76 1"/>
+                            <geom name="link4_geom" class="arm_visual" mesh="link4" mass="0.0455" pos="0.15 0 0.13" rgba="0.82 0.80 0.76 1"/>
+                            <geom name="link4_idler_geom" class="arm_visual" mesh="link4_idler" mass="0.0095" pos="0.15 0 0.13" rgba="0.82 0.80 0.76 1"/>
+                            <geom name="clips_j4_geom" class="arm_visual" mesh="clips_j4" mass="0.0004" pos="0.15 0 0.13" rgba="0.82 0.80 0.76 1"/>
                             <geom name="servo_j4_geom" class="arm_visual" mesh="sts3215" mass="0.055" pos="-0.1175 0 -0.044" quat="0 0 0 1" rgba="0.12 0.12 0.13 1"/>
 
                             <body name="joint4_body" pos="-0.13 0 0">
                                 <joint name="joint4" type="hinge" axis="0 0 1" range="-2.6180 2.6180"/>
-                                <geom name="link5_geom" class="arm_visual" mesh="link5" mass="0.0441" pos="0.28 0 0.13" rgba="0.82 0.80 0.76 1"/>
+                                <geom name="link5_geom" class="arm_visual" mesh="link5" mass="0.0331" pos="0.28 0 0.13" rgba="0.82 0.80 0.76 1"/>
+                                <geom name="link5_idler_geom" class="arm_visual" mesh="link5_idler" mass="0.0144" pos="0.28 0 0.13" rgba="0.82 0.80 0.76 1"/>
+                                <geom name="clips_jf_geom" class="arm_visual" mesh="clips_jf" mass="0.0004" pos="0.28 0 0.13" rgba="0.82 0.80 0.76 1"/>
                                 <geom name="servo_frog_geom" class="arm_visual" mesh="sts3215" mass="0.055" pos="-0.0875 0 -0.044" quat="0 0 0 1" rgba="0.12 0.12 0.13 1"/>
 
                                 <body name="end_effector" pos="-0.1 0 0">
@@ -184,7 +206,7 @@
              (2.94 N*m) instead of arm.xml's tuned 8/4/3/3/2 N*m. kp is softened
              to 1/4 of arm.xml's (natural frequency halved) and kv is critical
              damping at arm_v2's largest effective inertias over the threaded start poses
-             (0.05164, 0.03099, 0.01464, 0.01186, 0.00468 kg*m^2), counting the
+             (0.05359, 0.0319, 0.01501, 0.01202, 0.00469 kg*m^2), counting the
              0.5 N*m*s joint damping: kv = 2*sqrt(kp*I) - 0.5.
              The comment below describes arm.xml's original tuning; the filter
              time constants and the frog motor are unchanged. -->
@@ -211,19 +233,19 @@
         <general joint="joint1" ctrllimited="true" ctrlrange="-3.14 3.14" forcerange="-2.94 2.94"
                  dyntype="filter" dynprm="0.05 0 0"
                  gaintype="fixed" gainprm="150 0 0"
-                 biastype="affine" biasprm="0 -150 -5.07"/>
+                 biastype="affine" biasprm="0 -150 -5.17"/>
         <general joint="joint2" ctrllimited="true" ctrlrange="-3.14 3.14" forcerange="-2.94 2.94"
                  dyntype="filter" dynprm="0.05 0 0"
                  gaintype="fixed" gainprm="150 0 0"
-                 biastype="affine" biasprm="0 -150 -3.81"/>
+                 biastype="affine" biasprm="0 -150 -3.87"/>
         <general joint="joint5" ctrllimited="true" ctrlrange="-3.14 3.14" forcerange="-2.94 2.94"
                  dyntype="filter" dynprm="0.03 0 0"
                  gaintype="fixed" gainprm="100 0 0"
-                 biastype="affine" biasprm="0 -100 -1.92"/>
+                 biastype="affine" biasprm="0 -100 -1.95"/>
         <general joint="joint3" ctrllimited="true" ctrlrange="-3.14 3.14" forcerange="-2.94 2.94"
                  dyntype="filter" dynprm="0.04 0 0"
                  gaintype="fixed" gainprm="100 0 0"
-                 biastype="affine" biasprm="0 -100 -1.68"/>
+                 biastype="affine" biasprm="0 -100 -1.69"/>
         <general joint="joint4" ctrllimited="true" ctrlrange="-3.14 3.14" forcerange="-2.94 2.94"
                  dyntype="filter" dynprm="0.03 0 0"
                  gaintype="fixed" gainprm="50 0 0"
